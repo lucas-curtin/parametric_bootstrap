@@ -43,12 +43,19 @@ pdf_functions = {
             sigma=params["sigma"],
             beta=params["beta"],
             m=params["m"],
+            x_lower=pdf.X_LOWER,
+            x_upper=pdf.X_UPPER,
         ),
         "x_bounds": (pdf.X_LOWER, pdf.X_UPPER),
         "y_bounds": (None, None),  # None indicates single integration over x
     },
     "h_s(Y)": {
-        "pdf": partial(pdf.truncated_exponential_decay, lam=params["lambda"]),
+        "pdf": partial(
+            pdf.truncated_exponential_decay,
+            lam=params["lambda"],
+            y_lower=pdf.Y_LOWER,
+            y_upper=pdf.Y_UPPER,
+        ),
         "x_bounds": (None, None),  # None indicates single integration over y
         "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
     },
@@ -63,7 +70,14 @@ pdf_functions = {
         "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
     },
     "s(X, Y)": {
-        "pdf": partial(pdf.signal_pdf, params=params),
+        "pdf": partial(
+            pdf.signal_pdf,
+            params=params,
+            y_lower=pdf.Y_LOWER,
+            y_upper=pdf.Y_UPPER,
+            x_lower=pdf.X_LOWER,
+            x_upper=pdf.X_UPPER,
+        ),
         "x_bounds": (pdf.X_LOWER, pdf.X_UPPER),
         "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
     },
@@ -73,7 +87,14 @@ pdf_functions = {
         "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
     },
     "f(X, Y)": {
-        "pdf": partial(pdf.total_pdf, params=params),
+        "pdf": partial(
+            pdf.total_pdf,
+            params=params,
+            y_lower=pdf.Y_LOWER,
+            y_upper=pdf.Y_UPPER,
+            x_lower=pdf.X_LOWER,
+            x_upper=pdf.X_UPPER,
+        ),
         "x_bounds": (pdf.X_LOWER, pdf.X_UPPER),
         "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
     },

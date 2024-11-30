@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from loguru import logger
 from scipy.integrate import dblquad, quad
 
 
@@ -28,11 +29,13 @@ def integrate_pdf(
     """
     if y_lower is not None and x_lower is not None:
         # Perform double integration if y bounds are provided
+        logger.info("Double Integration")
         return integrate_double_pdf(pdf, x_lower, x_upper, y_lower, y_upper)
     # Perform single integration if only x bounds are provided
     if x_lower is not None:
+        logger.info("X Integration")
         return integrate_single_pdf(pdf, x_lower, x_upper)
-
+    logger.info("Y Integration")
     return integrate_single_pdf(pdf, y_lower, y_upper)
 
 
