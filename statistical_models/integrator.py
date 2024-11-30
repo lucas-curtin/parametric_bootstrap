@@ -4,19 +4,65 @@ from __future__ import annotations
 
 from typing import Callable
 
-from scipy.integrate import dblquad
-
-from .pdfs import background_pdf, signal_pdf, total_pdf
+from scipy.integrate import dblquad, quad
 
 
 def integrate_pdf(
+    pdf: Callable,
+    x_lower: float | None = None,
+    x_upper: float | None = None,
+    y_lower: float | None = None,
+    y_upper: float | None = None,
+) -> float:
+    """Determines whether to perform single or double integration based on the input.
+
+    Parameters:
+        pdf (Callable): A single-variable or two-variable PDF to integrate.
+        x_lower (Optional[float]): Lower bound of integration for the x-dimension.
+        x_upper (Optional[float]): Upper bound of integration for the x-dimension.
+        y_lower (Optional[float]): Lower bound of integration for the y-dimension (if 2D).
+        y_upper (Optional[float]): Upper bound of integration for the y-dimension (if 2D).
+
+    Returns:
+        float: Result of the numerical integration.
+    """
+    if y_lower is not None and x_lower is not None:
+        # Perform double integration if y bounds are provided
+        return integrate_double_pdf(pdf, x_lower, x_upper, y_lower, y_upper)
+    # Perform single integration if only x bounds are provided
+    if x_lower is not None:
+        return integrate_single_pdf(pdf, x_lower, x_upper)
+
+    return integrate_single_pdf(pdf, y_lower, y_upper)
+
+
+def integrate_single_pdf(
+    pdf: Callable[[float], float],
+    lower: float,
+    upper: float,
+) -> float:
+    """Numerically integrates a single-variable PDF over specified bounds.
+
+    Parameters:
+        pdf (Callable[[float], float]): A single-variable PDF to integrate.
+        lower (float): Lower bound of integration.
+        upper (float): Upper bound of integration.
+
+    Returns:
+        float: Result of the numerical integration.
+    """
+    result, _ = quad(pdf, lower, upper)
+    return result
+
+
+def integrate_double_pdf(
     pdf: Callable[[float, float], float],
     x_lower: float,
     x_upper: float,
     y_lower: float,
     y_upper: float,
 ) -> float:
-    """Numerically integrates a given two-dimensional PDF over specified bounds.
+    """Numerically integrates a two-dimensional PDF over specified bounds.
 
     Parameters:
         pdf (Callable[[float, float], float]): A two-dimensional PDF to integrate.
@@ -36,24 +82,3 @@ def integrate_pdf(
         lambda x: y_upper,
     )
     return result
-
-
-def check_normalisation(params: dict) -> tuple[float, float, float]:
-    """Checks the normalisation of the signal, background, and total PDFs.
-
-    Parameters:
-        params (dict): Dictionary containing the parameters for the signal and background PDFs:
-                       - Signal parameters: mu, sigma, beta, m, lambda.
-                       - Background parameters: mu_b, sigma_b.
-                       - Total parameters: f (signal fraction).
-
-    Returns:
-        tuple[float, float, float]: A tuple containing:
-            - Signal PDF normalisation (float).
-            - Background PDF normalisation (float).
-            - Total PDF normalisation (float).
-    """
-    signal_norm = integrate_pdf(lambda x, y: signal_pdf(x, y, params), 0, 5, 0, 10)
-    background_norm = integrate_pdf(lambda x, y: background_pdf(x, y, params), 0, 5, 0, 10)
-    total_norm = integrate_pdf(lambda x, y: total_pdf(x, y, params), 0, 5, 0, 10)
-    return signal_norm, background_norm, total_norm

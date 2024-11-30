@@ -3,8 +3,34 @@
 from __future__ import annotations
 
 import numpy as np
-from integrator import integrate_pdf
 from scipy.stats import norm, uniform
+
+from .integrator import integrate_pdf
+
+# Define hardcoded bounds
+X_LOWER = 0
+X_UPPER = 5
+Y_LOWER = 0
+Y_UPPER = 10
+
+
+def crystal_ball_inverse_normalisation(sigma: float, beta: float, m: float) -> float:
+    """Computes the inverse normalisation constant (N^-1) for the Crystal Ball PDF.
+
+    Parameters:
+        sigma (float): Standard deviation (scale) of the Gaussian core.
+        beta (float): Transition point for the power-law tail.
+        m (float): Slope of the power-law tail.
+
+    Returns:
+        float: The inverse normalisation constant N^-1.
+    """
+    # Calculate the components of the formula
+    term1 = (m / (beta * (m - 1))) * np.exp(-(beta**2) / 2)
+    term2 = np.sqrt(2 * np.pi) * norm.cdf(beta)
+
+    # Combine terms to compute N^-1
+    return sigma * (term1 + term2)
 
 
 def crystal_ball(
@@ -14,26 +40,15 @@ def crystal_ball(
     beta: float,
     m: float,
 ) -> np.ndarray:
-    """Computes the Crystal Ball probability density function (PDF).
-
-    Parameters:
-        x (float or np.ndarray): The input variable.
-        mu (float): Mean (location) of the Gaussian core.
-        sigma (float): Standard deviation (scale) of the Gaussian core.
-        beta (float): Transition point for the power-law tail.
-        m (float): Slope of the power-law tail.
-
-    Returns:
-        np.ndarray: Values of the PDF at the given points.
-    """
+    """Computes the Crystal Ball probability density function (PDF)."""
     z = (x - mu) / sigma
-    a = (m / beta) ** m * np.exp(-(beta**2) / 2)
+    a = ((m / beta) ** m) * np.exp(-(beta**2) / 2)
     b = (m / beta) - beta - z
 
-    gaussian = np.exp(-(z**2) / 2) * (z > -beta)
-    power_law = a * b**-m * (z <= -beta)
+    if z > -beta:
+        return np.exp(-(z**2) / 2) * (z > -beta)
 
-    return gaussian + power_law
+    return a * (b ** (-m)) * (z <= -beta)
 
 
 def truncated_crystal_ball(
@@ -42,97 +57,40 @@ def truncated_crystal_ball(
     sigma: float,
     beta: float,
     m: float,
-    lower: float,
-    upper: float,
 ) -> np.ndarray:
-    """Computes the truncated Crystal Ball PDF normalised over the specified range.
-
-    Parameters:
-        x (float or np.ndarray): The input variable.
-        mu (float): Mean (location) of the Gaussian core.
-        sigma (float): Standard deviation (scale) of the Gaussian core.
-        beta (float): Transition point for the power-law tail.
-        m (float): Slope of the power-law tail.
-        lower (float): Lower bound of the truncation.
-        upper (float): Upper bound of the truncation.
-
-    Returns:
-        np.ndarray: Normalised values of the PDF at the given points.
-    """
-    norm_factor = integrate_pdf(lambda t: crystal_ball(t, mu, sigma, beta, m), lower, upper)
-    pdf = crystal_ball(x, mu, sigma, beta, m)
-    return pdf / norm_factor
+    """Computes the truncated Crystal Ball PDF normalised over the specified range."""
+    pdf = crystal_ball(x=x, mu=mu, sigma=sigma, beta=beta, m=m)
+    inverse_norm = crystal_ball_inverse_normalisation(sigma=sigma, beta=beta, m=m)
+    return pdf * inverse_norm
 
 
 def exponential_decay(y: float | np.ndarray, lam: float) -> np.ndarray:
-    """Computes the exponential decay PDF.
-
-    Parameters:
-        y (float or np.ndarray): The input variable.
-        lam (float): Decay constant.
-
-    Returns:
-        np.ndarray: Values of the PDF at the given points.
-    """
+    """Computes the exponential decay PDF."""
     return lam * np.exp(-lam * y)
 
 
 def truncated_exponential_decay(
     y: float | np.ndarray,
     lam: float,
-    lower: float,
-    upper: float,
 ) -> np.ndarray:
-    """Computes the truncated exponential decay PDF normalised over the specified range.
-
-    Parameters:
-        y (float or np.ndarray): The input variable.
-        lam (float): Decay constant.
-        lower (float): Lower bound of the truncation.
-        upper (float): Upper bound of the truncation.
-
-    Returns:
-        np.ndarray: Normalised values of the PDF at the given points.
-    """
-    norm_factor = integrate_pdf(lambda t: exponential_decay(t, lam), lower, upper)
+    """Computes the truncated exponential decay PDF normalised over the specified range."""
+    norm_factor = integrate_pdf(lambda t: exponential_decay(t, lam), Y_LOWER, Y_UPPER)
     pdf = exponential_decay(y, lam)
     return pdf / norm_factor
 
 
-def uniform_pdf(x: float | np.ndarray, lower: float, upper: float) -> np.ndarray:
-    """Computes the uniform distribution PDF over a specified range.
-
-    Parameters:
-        x (float or np.ndarray): The input variable.
-        lower (float): Lower bound of the range.
-        upper (float): Upper bound of the range.
-
-    Returns:
-        np.ndarray: Values of the PDF at the given points.
-    """
-    return uniform.pdf(x, loc=lower, scale=upper - lower)
+def uniform_pdf(x: float | np.ndarray) -> np.ndarray:
+    """Computes the uniform distribution PDF over a specified range."""
+    return uniform.pdf(x, loc=X_LOWER, scale=X_UPPER - X_LOWER)
 
 
 def truncated_gaussian_pdf(
     y: float | np.ndarray,
     mu: float,
     sigma: float,
-    lower: float,
-    upper: float,
 ) -> np.ndarray:
-    """Computes the truncated Gaussian PDF normalised over the specified range.
-
-    Parameters:
-        y (float or np.ndarray): The input variable.
-        mu (float): Mean (location) of the Gaussian.
-        sigma (float): Standard deviation (scale) of the Gaussian.
-        lower (float): Lower bound of the truncation.
-        upper (float): Upper bound of the truncation.
-
-    Returns:
-        np.ndarray: Normalised values of the PDF at the given points.
-    """
-    norm_factor = norm.cdf(upper, mu, sigma) - norm.cdf(lower, mu, sigma)
+    """Computes the truncated Gaussian PDF normalised over the specified range."""
+    norm_factor = norm.cdf(Y_UPPER, mu, sigma) - norm.cdf(Y_LOWER, mu, sigma)
     pdf = norm.pdf(y, mu, sigma)
     return pdf / norm_factor
 
@@ -142,27 +100,15 @@ def signal_pdf(
     y: float | np.ndarray,
     params: dict,
 ) -> np.ndarray:
-    """Computes the signal PDF as a product of a truncated Crystal Ball and exponential decay.
-
-    Parameters:
-        x (float or np.ndarray): Input variable for the x-dimension.
-        y (float or np.ndarray): Input variable for the y-dimension.
-        params (dict): Dictionary containing the signal parameters:
-                       mu, sigma, beta, m, lambda.
-
-    Returns:
-        np.ndarray: Values of the signal PDF at the given points.
-    """
+    """Computes the signal PDF as a product of a truncated Crystal Ball and exponential decay."""
     gs_x = truncated_crystal_ball(
         x,
         params["mu"],
         params["sigma"],
         params["beta"],
         params["m"],
-        0,
-        5,
     )
-    hs_y = truncated_exponential_decay(y, params["lambda"], 0, 10)
+    hs_y = truncated_exponential_decay(y, params["lambda"])
     return gs_x * hs_y
 
 
@@ -171,34 +117,18 @@ def background_pdf(
     y: float | np.ndarray,
     params: dict,
 ) -> np.ndarray:
-    """Computes the background PDF as a product of a uniform distribution and a truncated Gaussian.
-
-    Parameters:
-        x (float or np.ndarray): Input variable for the x-dimension.
-        y (float or np.ndarray): Input variable for the y-dimension.
-        params (dict): Dictionary containing the background parameters:
-                       mu_b, sigma_b.
-
-    Returns:
-        np.ndarray: Values of the background PDF at the given points.
-    """
-    gb_x = uniform_pdf(x, 0, 5)
-    hb_y = truncated_gaussian_pdf(y, params["mu_b"], params["sigma_b"], 0, 10)
+    """Computes the background PDF as a product of a uniform distribution and a truncated Gaussian."""
+    gb_x = uniform_pdf(x)
+    hb_y = truncated_gaussian_pdf(y, params["mu_b"], params["sigma_b"])
     return gb_x * hb_y
 
 
-def total_pdf(x: float | np.ndarray, y: float | np.ndarray, params: dict) -> np.ndarray:
-    """Computes the total PDF as a weighted sum of signal and background PDFs.
-
-    Parameters:
-        x (float or np.ndarray): Input variable for the x-dimension.
-        y (float or np.ndarray): Input variable for the y-dimension.
-        params (dict): Dictionary containing the parameters:
-                       f (signal fraction), and other signal and background parameters.
-
-    Returns:
-        np.ndarray: Values of the total PDF at the given points.
-    """
+def total_pdf(
+    x: float | np.ndarray,
+    y: float | np.ndarray,
+    params: dict,
+) -> np.ndarray:
+    """Computes the total PDF as a weighted sum of signal and background PDFs."""
     f = params["f"]
     signal = signal_pdf(x, y, params)
     background = background_pdf(x, y, params)
