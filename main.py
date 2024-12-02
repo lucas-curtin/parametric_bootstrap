@@ -206,64 +206,30 @@ def negative_log_likelihood(params: dict, x_data: np.ndarray, y_data: np.ndarray
     return -log_likelihood
 
 
-def perform_fit_iminuit(
-    x_data: np.ndarray,
-    y_data: np.ndarray,
-    initial_params: dict,
-) -> Minuit:
-    """Perform an extended maximum likelihood fit using iminuit."""
-
-    def wrapped_neg_log_likelihood(  # noqa: PLR0913
-        mu: float,
-        sigma: float,
-        beta: float,
-        m: float,
-        f: float,
-        lam: float,
-        mu_b: float,
-        sigma_b: float,
-        n_expected: float,
-    ) -> float:
-        """A wrapper function for the negative log-likelihood."""
-        current_params = {
-            "mu": mu,
-            "sigma": sigma,
-            "beta": beta,
-            "m": m,
-            "f": f,
-            "lam": lam,
-            "mu_b": mu_b,
-            "sigma_b": sigma_b,
-            "n_expected": n_expected,
-        }
-        return negative_log_likelihood(current_params, x_data, y_data)
-
-    # Add initial value for n_expected
-    initial_params = {**initial_params, "n_expected": len(x_data)}
-
-    # Instantiate Minuit using dictionary unpacking for parameters
-    m = Minuit(
-        wrapped_neg_log_likelihood,
-        **initial_params,
-    )
-
-    # Specify parameter bounds using lists
-    m.limits = [
-        (None, None),  # mu: no bounds
-        (None, None),  # sigma: no bounds
-        (0, None),  # beta: beta > 0
-        (1, None),  # m: m > 1
-        (0, 1),  # f: mixing fraction in [0, 1]
-        (None, None),  # lam: no bounds
-        (None, None),  # mu_b: no bounds
-        (None, None),  # sigma_b: no bounds
-        (0, None),  # n_expected: must be positive
-    ]
-
-    m.errordef = Minuit.LIKELIHOOD
-    m.migrad()  # Perform the fit
-    m.hesse()  # Compute uncertainties
-    return m
+def wrapped_neg_log_likelihood(  # noqa: PLR0913
+    mu: float,
+    sigma: float,
+    beta: float,
+    m: float,
+    f: float,
+    lam: float,
+    mu_b: float,
+    sigma_b: float,
+    n_expected: float,
+) -> float:
+    """A wrapper function for the negative log-likelihood."""
+    current_params = {
+        "mu": mu,
+        "sigma": sigma,
+        "beta": beta,
+        "m": m,
+        "f": f,
+        "lam": lam,
+        "mu_b": mu_b,
+        "sigma_b": sigma_b,
+        "n_expected": n_expected,
+    }
+    return negative_log_likelihood(current_params, x_data, y_data)
 
 
 # %%
@@ -276,10 +242,24 @@ total_events = 100_000
 # Generate sample
 x_data, y_data = generate_sample(pdf=total, total_events=total_events, rng=rng)
 
-# Perform the fit
-best_params = perform_fit_iminuit(x_data=x_data, y_data=y_data, initial_params=params)
+# Add initial value for n_expected
+initial_params = {**params, "n_expected": len(x_data)}
 
-# Output the fit results
-logger.info(f"Best fit parameters:\n{best_params.params}")
+# Instantiate Minuit using dictionary unpacking for parameters
+m = Minuit(
+    wrapped_neg_log_likelihood,
+    **initial_params,
+)
 
+# Specify parameter bounds using lists
+
+m.limits["m"] = (0, None)
+m.limits["beta"] = (1, None)
+m.limits["n_expected"] = (0, None)
+
+
+m.errordef = Minuit.LIKELIHOOD
+m.migrad()  # Perform the fit
+m.hesse()  # Compute uncertainties
+best_params = m
 # %%
