@@ -1,171 +1,130 @@
 """Main script for analysis."""
 
 # %% Imports and setup
-
-from functools import partial
+from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-import statistical_models.pdfs as pdf
+from iminuit import Minuit
 from loguru import logger
-from statistical_models.integrator import integrate_pdf
+from statistical_models.pdfs import BOUNDS_X, BOUNDS_Y, PDF, g_b_pdf, g_s_pdf, h_b_pdf, h_s_pdf
 
-# %% Part (a) - Numeric Validation of the Normalisation Constant
-
+# %%
+# ? Choose params Parameters
 
 params = {
-    "mu": 3,  # Mean of the signal Crystal Ball PDF
-    "sigma": 0.3,  # Standard deviation of the signal Crystal Ball PDF
-    "beta": 1,  # Transition point for the signal Crystal Ball PDF
-    "m": 1.4,  # Power-law slope for the signal Crystal Ball PDF
-    "f": 0.6,  # Signal fraction in the total PDF
-    "lambda": 0.3,  # Decay constant for the signal exponential PDF
-    "mu_b": 0,  # Mean of the background Gaussian PDF
-    "sigma_b": 2.5,  # Standard deviation of the background Gaussian PDF
+    "mu": 3,
+    "sigma": 0.3,
+    "beta": 1,
+    "m": 1.4,
+    "f": 0.6,
+    "lam": 0.3,
+    "mu_b": 0,
+    "sigma_b": 2.5,
 }
 
-n_inverse = pdf.crystal_ball_inverse_normalisation(
-    sigma=params["sigma"],
-    beta=params["beta"],
-    m=params["m"],
-)
+# %%
+# ? Create 1D PDFs
+
+g_s = g_s_pdf(params=params)
+h_s = h_s_pdf(params=params)
+
+g_b = g_b_pdf()
+h_b = h_b_pdf(params=params)
 
 
-# %% Part (b) - Total PDF Normalisation Check
+signal = PDF(
+    func=lambda x, y: g_s.evaluate(x) * h_s.evaluate(y),
+    bounds=[BOUNDS_X, BOUNDS_Y],
+).normalise()
+
+# Combine g_b and h_b into a 2D background PDF
+background = PDF(
+    func=lambda x, y: g_b.evaluate(x) * h_b.evaluate(y),
+    bounds=[BOUNDS_X, BOUNDS_Y],
+).normalise()
 
 
-# Define the PDF functions for normalisation checks, including bounds
-pdf_functions = {
-    "g_s(X)": {
-        "pdf": partial(
-            pdf.truncated_crystal_ball,
-            mu=params["mu"],
-            sigma=params["sigma"],
-            beta=params["beta"],
-            m=params["m"],
-            x_lower=pdf.X_LOWER,
-            x_upper=pdf.X_UPPER,
-        ),
-        "x_bounds": (pdf.X_LOWER, pdf.X_UPPER),
-        "y_bounds": (None, None),  # None indicates single integration over x
+def total_pdf(f: float, signal: PDF, background: PDF) -> PDF:
+    """Calculates the total PDF by combining signal and background."""
+    return (f * signal) + ((1 - f) * background)
+
+
+total = total_pdf(f=params["f"], signal=signal, background=background)
+
+
+pdf_dict = {
+    "g_s(X)": g_s,
+    "h_s(Y)": h_s,
+    "g_b(X)": g_b,
+    "h_b(Y)": h_b,
+    "Signal": signal,
+    "Background": background,
+    "Total": total,
+}
+
+# %%
+# ? Normalisation Checks
+
+for name, pdf in pdf_dict.items():
+    normalisation = pdf.integrate()
+    logger.info(f"Normalisation of {name}: {normalisation:.6f}")
+# %%
+# ? Evaluate and Plot the PDFs
+
+x_range = np.linspace(BOUNDS_X[0], BOUNDS_X[1], 500)
+y_range = np.linspace(BOUNDS_Y[0], BOUNDS_Y[1], 500)
+
+fixed_y = BOUNDS_Y[1] / 2
+fixed_x = BOUNDS_X[1] / 2
+
+# Dictionary to store data
+pdf_data = {
+    "Signal": {
+        "x": [signal.evaluate(x, fixed_y) for x in x_range],
+        "y": [signal.evaluate(fixed_x, y) for y in y_range],
     },
-    "h_s(Y)": {
-        "pdf": partial(
-            pdf.truncated_exponential_decay,
-            lam=params["lambda"],
-            y_lower=pdf.Y_LOWER,
-            y_upper=pdf.Y_UPPER,
-        ),
-        "x_bounds": (None, None),  # None indicates single integration over y
-        "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
+    "Background": {
+        "x": [background.evaluate(x, fixed_y) for x in x_range],
+        "y": [background.evaluate(fixed_x, y) for y in y_range],
     },
-    "g_b(X)": {
-        "pdf": pdf.uniform_pdf,
-        "x_bounds": (pdf.X_LOWER, pdf.X_UPPER),
-        "y_bounds": (None, None),
-    },
-    "h_b(Y)": {
-        "pdf": partial(pdf.truncated_gaussian_pdf, mu=params["mu_b"], sigma=params["sigma_b"]),
-        "x_bounds": (None, None),
-        "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
-    },
-    "s(X, Y)": {
-        "pdf": partial(
-            pdf.signal_pdf,
-            params=params,
-            y_lower=pdf.Y_LOWER,
-            y_upper=pdf.Y_UPPER,
-            x_lower=pdf.X_LOWER,
-            x_upper=pdf.X_UPPER,
-        ),
-        "x_bounds": (pdf.X_LOWER, pdf.X_UPPER),
-        "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
-    },
-    "b(X, Y)": {
-        "pdf": partial(pdf.background_pdf, params=params),
-        "x_bounds": (pdf.X_LOWER, pdf.X_UPPER),
-        "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
-    },
-    "f(X, Y)": {
-        "pdf": partial(
-            pdf.total_pdf,
-            params=params,
-            y_lower=pdf.Y_LOWER,
-            y_upper=pdf.Y_UPPER,
-            x_lower=pdf.X_LOWER,
-            x_upper=pdf.X_UPPER,
-        ),
-        "x_bounds": (pdf.X_LOWER, pdf.X_UPPER),
-        "y_bounds": (pdf.Y_LOWER, pdf.Y_UPPER),
+    "Total": {
+        "x": [total.evaluate(x, fixed_y) for x in x_range],
+        "y": [total.evaluate(fixed_x, y) for y in y_range],
     },
 }
 
-# Iterate over all PDFs and check their normalisation
-for name, details in pdf_functions.items():
-    pdf_function = details["pdf"]
-    x_bounds = details["x_bounds"]
-    y_bounds = details["y_bounds"]
+# Scaling factors for signal and background
+signal_scale = params["f"]
+background_scale = 1 - params["f"]
 
-    normalisation = integrate_pdf(
-        pdf_function,
-        x_bounds[0],
-        x_bounds[1],
-        y_bounds[0],
-        y_bounds[1],
+# Scale the data
+for key in ["Signal", "Background"]:
+    pdf_data[key]["x"] = np.array(pdf_data[key]["x"]) * (
+        signal_scale if key == "Signal" else background_scale
+    )
+    pdf_data[key]["y"] = np.array(pdf_data[key]["y"]) * (
+        signal_scale if key == "Signal" else background_scale
     )
 
-    logger.info(f"Normalisation of {name}: {normalisation:.6f}")
-
-
 # %%
+# ? Plot the 1D Projection in X
 
-# ? Evaluate the PDFs
-x_range = np.linspace(pdf.X_LOWER, pdf.X_UPPER, 500)
-y_range = np.linspace(pdf.Y_LOWER, pdf.Y_UPPER, 500)
-
-g_s_x = [pdf_functions["g_s(X)"]["pdf"](x) for x in x_range]
-h_s_y = [pdf_functions["h_s(Y)"]["pdf"](y) for y in y_range]
-
-g_b_x = [pdf_functions["g_b(X)"]["pdf"](x) for x in x_range]
-h_b_y = [pdf_functions["h_b(Y)"]["pdf"](y) for y in y_range]
-
-# Compute signal and background components for X and Y
-
-total_x = params["f"] * np.array(g_s_x) + (1 - params["f"]) * np.array(g_b_x)
-total_y = params["f"] * np.array(h_s_y) + (1 - params["f"]) * np.array(h_b_y)
-
-# %%
-# ? Plot the 1D projection in X
 plt.figure(figsize=(8, 6))
-plt.plot(x_range, total_x, label="Total PDF", linewidth=2)
-plt.plot(x_range, params["f"] * np.array(g_s_x), "--", label="Signal PDF", linewidth=1.5)
-plt.plot(
-    x_range,
-    (1 - params["f"]) * np.array(g_b_x),
-    "--",
-    label="Background PDF",
-    linewidth=1.5,
-)
-plt.title("1D Projection in X")
+for name, data in pdf_data.items():
+    plt.plot(x_range, data["x"], label=f"{name} PDF")
+plt.title(f"1D Projection in X for Y={fixed_y}")
 plt.xlabel("X")
 plt.ylabel("Probability Density")
 plt.legend()
 plt.grid()
 plt.show()
 
-# %%
-# ? Plot the 1D projection in Y
+
 plt.figure(figsize=(8, 6))
-plt.plot(y_range, total_y, label="Total PDF", linewidth=2)
-plt.plot(y_range, params["f"] * np.array(h_s_y), "--", label="Signal PDF", linewidth=1.5)
-plt.plot(
-    y_range,
-    (1 - params["f"]) * np.array(h_b_y),
-    "--",
-    label="Background PDF",
-    linewidth=1.5,
-)
-plt.title("1D Projection in Y")
+for name, data in pdf_data.items():
+    plt.plot(y_range, data["y"], label=f"{name} PDF")
+plt.title(f"1D Projection in Y for X={fixed_x}")
 plt.xlabel("Y")
 plt.ylabel("Probability Density")
 plt.legend()
@@ -173,16 +132,154 @@ plt.grid()
 plt.show()
 
 # %%
-# ? 2D plot of the joint probability density
+# ? 2D Joint Probability Density
+
 x_grid, y_grid = np.meshgrid(x_range, y_range)
-joint_pdf = np.array([[pdf_functions["f(X, Y)"]["pdf"](x, y) for x in x_range] for y in y_range])
+joint_pdf = np.array([[total.evaluate(x, y) for x in x_range] for y in y_range])
 
 
 plt.figure(figsize=(10, 8))
-plt.contourf(x_grid, y_grid, joint_pdf, levels=50, cmap="viridis")
-plt.colorbar(label="Probability Density")
+contour = plt.contourf(x_grid, y_grid, joint_pdf, levels=50, cmap="viridis")
+plt.colorbar(contour, label="Probability Density")
 plt.title("2D Joint Probability Density")
 plt.xlabel("X")
 plt.ylabel("Y")
+plt.grid(visible=False)
 plt.show()
+
+
+# %%
+# ? Generate sample
+
+
+def generate_sample(
+    pdf: PDF,
+    total_events: int,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Generate a high-statistics sample from the joint PDF."""
+    x_samples = rng.uniform(0, 5, size=total_events)
+    y_samples = rng.uniform(0, 10, size=total_events)
+    probabilities = np.array([pdf.evaluate(x, y) for x, y in zip(x_samples, y_samples)])
+    sampled_indices = rng.choice(
+        np.arange(total_events),
+        size=total_events,
+        p=probabilities / probabilities.sum(),
+    )
+    return x_samples[sampled_indices], y_samples[sampled_indices]
+
+
+def negative_log_likelihood(params: dict, x_data: np.ndarray, y_data: np.ndarray) -> float:
+    """Compute the extended negative log-likelihood for the total PDF."""
+    # Dynamically reconstruct signal and background PDFs
+    g_s = g_s_pdf(params=params)
+    h_s = h_s_pdf(params=params)
+
+    g_b = g_b_pdf()
+    h_b = h_b_pdf(params=params)
+
+    signal = PDF(
+        func=lambda x, y: g_s.evaluate(x) * h_s.evaluate(y),
+        bounds=[BOUNDS_X, BOUNDS_Y],
+    ).normalise()
+
+    background = PDF(
+        func=lambda x, y: g_b.evaluate(x) * h_b.evaluate(y),
+        bounds=[BOUNDS_X, BOUNDS_Y],
+    ).normalise()
+
+    pdf = total_pdf(params["f"], signal, background)
+
+    # Extract the expected number of events
+    n_expected = params["n_expected"]
+
+    # Compute the observed number of events
+    n_observed = len(x_data)
+
+    # Compute the negative extended log-likelihood
+    log_likelihood = (
+        -n_expected
+        + n_observed * np.log(n_expected)
+        - np.sum(np.log([pdf.evaluate(x, y) for x, y in zip(x_data, y_data)]))
+    )
+
+    return -log_likelihood
+
+
+def perform_fit_iminuit(
+    x_data: np.ndarray,
+    y_data: np.ndarray,
+    initial_params: dict,
+) -> Minuit:
+    """Perform an extended maximum likelihood fit using iminuit."""
+
+    def wrapped_neg_log_likelihood(  # noqa: PLR0913
+        mu: float,
+        sigma: float,
+        beta: float,
+        m: float,
+        f: float,
+        lam: float,
+        mu_b: float,
+        sigma_b: float,
+        n_expected: float,
+    ) -> float:
+        """A wrapper function for the negative log-likelihood."""
+        current_params = {
+            "mu": mu,
+            "sigma": sigma,
+            "beta": beta,
+            "m": m,
+            "f": f,
+            "lam": lam,
+            "mu_b": mu_b,
+            "sigma_b": sigma_b,
+            "n_expected": n_expected,
+        }
+        return negative_log_likelihood(current_params, x_data, y_data)
+
+    # Add initial value for n_expected
+    initial_params = {**initial_params, "n_expected": len(x_data)}
+
+    # Instantiate Minuit using dictionary unpacking for parameters
+    m = Minuit(
+        wrapped_neg_log_likelihood,
+        **initial_params,
+    )
+
+    # Specify parameter bounds using lists
+    m.limits = [
+        (None, None),  # mu: no bounds
+        (None, None),  # sigma: no bounds
+        (0, None),  # beta: beta > 0
+        (1, None),  # m: m > 1
+        (0, 1),  # f: mixing fraction in [0, 1]
+        (None, None),  # lam: no bounds
+        (None, None),  # mu_b: no bounds
+        (None, None),  # sigma_b: no bounds
+        (0, None),  # n_expected: must be positive
+    ]
+
+    m.errordef = Minuit.LIKELIHOOD
+    m.migrad()  # Perform the fit
+    m.hesse()  # Compute uncertainties
+    return m
+
+
+# %%
+# ? iminuit tests
+
+rng = np.random.default_rng(seed=451)
+
+total_events = 100_000
+
+# Generate sample
+x_data, y_data = generate_sample(pdf=total, total_events=total_events, rng=rng)
+
+# Perform the fit
+best_params = perform_fit_iminuit(x_data=x_data, y_data=y_data, initial_params=params)
+
+# Output the fit results
+logger.info(f"Best fit parameters:\n{best_params.params}")
+
 # %%
