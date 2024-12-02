@@ -9,7 +9,15 @@ description = "A package to define statistical PDFs and perform numerical integr
 authors = [{ name = "Lucas Curtin", email = "lucas.curtin@gmail.com" }]
 readme = "README.md"
 license = { text = "MIT" }
-dependencies = ["scipy", "numpy", "matplotlib", "ruff", "pytest", "loguru"]
+dependencies = [
+    "scipy",
+    "numpy",
+    "matplotlib",
+    "ruff",
+    "pytest",
+    "loguru",
+    "iminuit",
+]
 
 [tool.setuptools_scm]
 write_to = "statistical_models/version.py"
