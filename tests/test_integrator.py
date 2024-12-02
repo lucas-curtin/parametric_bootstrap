@@ -20,7 +20,7 @@ def test_normalisation() -> None:
         "beta": 1,  # Transition point for the signal Crystal Ball PDF
         "m": 1.4,  # Power-law slope for the signal Crystal Ball PDF
         "f": 0.6,  # Signal fraction in the total PDF
-        "lambda": 0.3,  # Decay constant for the signal exponential PDF
+        "lam": 0.3,  # Decay constant for the signal exponential PDF
         "mu_b": 0,  # Mean of the background Gaussian PDF
         "sigma_b": 2.5,  # Standard deviation of the background Gaussian PDF
     }
