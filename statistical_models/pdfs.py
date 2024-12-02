@@ -1,202 +1,214 @@
-"""Holds our PDFs for modelling statistical distributions and their computations."""
+"""Handles our pdf class."""
 
 from __future__ import annotations
 
 import numpy as np
-from scipy.stats import norm, uniform
-
-from .integrator import integrate_single_pdf
-
-# Define hardcoded bounds
-X_LOWER = 0
-X_UPPER = 5
-Y_LOWER = 0
-Y_UPPER = 10
+from scipy.integrate import nquad
+from scipy.stats import norm
+from scipy.stats import uniform as scipy_uniform
 
 
-def crystal_ball_inverse_normalisation(sigma: float, beta: float, m: float) -> float:
-    """Computes the inverse normalisation constant (N^-1) for the Crystal Ball PDF.
+class PDF:
+    """A base class for probability density functions."""
 
-    Parameters:
-        sigma (float): Standard deviation (scale) of the Gaussian core.
-        beta (float): Transition point for the power-law tail.
-        m (float): Slope of the power-law tail.
+    def __init__(
+        self,
+        func: callable,
+        bounds: list[tuple],
+    ) -> None:
+        """Create our pdf object with bounds."""
+        self.func = func  # The PDF function
+        self.bounds = bounds  # List of bounds, one tuple per dimension
 
-    Returns:
-        float: The inverse normalisation constant N^-1.
-    """
-    # Calculate the components of the formula
-    term1 = (m / (beta * (m - 1))) * np.exp(-(beta**2) / 2)
-    term2 = np.sqrt(2 * np.pi) * norm.cdf(beta)
+    def evaluate(self, *args: float) -> float:
+        """Evaluate the PDF at given values."""
+        return self.func(*args)
 
-    # Combine terms to compute N^-1
-    return sigma * (term1 + term2)
+    def integrate(self) -> float:
+        """Integrate the PDF over its specified bounds."""
+        if not self.bounds:
+            msg = "Integration bounds not specified."
+            raise ValueError(msg)
+
+        # Use n-dimensional integration based on the number of bounds provided
+        return nquad(self.func, self.bounds)[0]
+
+    def normalise(self) -> PDF:
+        """Return a normalised PDF over its bounds.
+
+        This ensures the total integral of the PDF over the specified bounds is equal to 1.
+        """
+        integral = self.integrate()
+        if integral == 0:
+            msg = "Cannot normalise a PDF with zero integral."
+            raise ValueError(msg)
+
+        # Define a new function that represents the normalised PDF
+        def normalised_func(*args: float) -> float:
+            return self.func(*args) / integral
+
+        # Return a new PDF object with the normalised function
+        return PDF(normalised_func, bounds=self.bounds)
+
+    def __mul__(self, other: PDF | float) -> PDF:
+        """Multiply the PDF with another PDF or a scalar."""
+        if isinstance(other, PDF):
+
+            def multiplied_func(*args: float) -> float:
+                """Multiply our function."""
+                return self.evaluate(*args) * other.evaluate(*args)
+
+            return PDF(multiplied_func, bounds=self.bounds)
+
+        if isinstance(other, (float, int)):
+
+            def scaled_func(*args: float) -> float:
+                """Scale our function."""
+                return self.evaluate(*args) * other
+
+            return PDF(scaled_func, bounds=self.bounds)
+
+        msg = "Can only multiply with another PDF or a scalar."
+        raise ValueError(msg)
+
+    def __rmul__(self, other: float) -> PDF:
+        """Handle scalar multiplication from the left."""
+        return self.__mul__(other)
+
+    def __add__(self, other: PDF | float) -> PDF:
+        """Add the PDF with another PDF or a scalar."""
+        if isinstance(other, PDF):
+
+            def added_func(*args: float) -> float:
+                """Add our PDFs together."""
+                return self.evaluate(*args) + other.evaluate(*args)
+
+            return PDF(added_func, bounds=self.bounds)
+
+        if isinstance(other, (float, int)):
+
+            def shifted_func(*args: float) -> float:
+                """Add a constant to our PDF."""
+                return self.evaluate(*args) + other
+
+            return PDF(shifted_func, bounds=self.bounds)
+
+        msg = "Can only add with another PDF or a scalar."
+        raise ValueError(msg)
+
+    def __radd__(self, other: float) -> PDF:
+        """Handle scalar addition from the left."""
+        return self.__add__(other)
+
+    def __sub__(self, other: PDF | float) -> PDF:
+        """Subtract another PDF or a scalar from this PDF."""
+        if isinstance(other, PDF):
+
+            def subtracted_func(*args: float) -> float:
+                """Subtract our PDFs."""
+                return self.evaluate(*args) - other.evaluate(*args)
+
+            return PDF(subtracted_func, bounds=self.bounds)
+
+        if isinstance(other, (float, int)):
+
+            def shifted_func(*args: float) -> float:
+                """Subtract a constant from our PDF."""
+                return self.evaluate(*args) - other
+
+            return PDF(shifted_func, bounds=self.bounds)
+
+        msg = "Can only subtract another PDF or a scalar."
+        raise ValueError(msg)
+
+    def __rsub__(self, other: float) -> PDF:
+        """Handle scalar subtraction from the left."""
+        if isinstance(other, (float, int)):
+
+            def shifted_func(*args: float) -> float:
+                """Subtract PDF from a constant."""
+                return other - self.evaluate(*args)
+
+            return PDF(shifted_func, bounds=self.bounds)
+
+        msg = "Can only subtract another PDF or a scalar."
+        raise ValueError(msg)
 
 
-def crystal_ball(
-    x: float | np.ndarray,
-    mu: float,
-    sigma: float,
-    beta: float,
-    m: float,
-) -> np.ndarray:
-    """Computes the Crystal Ball probability density function (PDF)."""
+# Hardcoded bounds
+BOUNDS_X = (0, 5)
+BOUNDS_Y = (0, 10)
+
+
+def crystal_ball(x: float, mu: float, sigma: float, beta: float, m: float) -> float:
+    """Crystal Ball probability density function (PDF)."""
     z = (x - mu) / sigma
-    a = ((m / beta) ** m) * np.exp(-(beta**2) / 2)
-    b = (m / beta) - beta - z
 
     if z > -beta:
         return np.exp(-(z**2) / 2) * (z > -beta)
+
+    a = ((m / beta) ** m) * np.exp(-(beta**2) / 2)
+    b = (m / beta) - beta - z
     return a * (b ** (-m)) * (z <= -beta)
 
 
-def truncated_crystal_ball(
-    x: float | np.ndarray,
-    mu: float,
-    sigma: float,
-    beta: float,
-    m: float,
-    x_lower: float,
-    x_upper: float,
-) -> np.ndarray:
-    """Computes the truncated Crystal Ball PDF normalised over the specified range."""
-    pdf = crystal_ball(x=x, mu=mu, sigma=sigma, beta=beta, m=m)
-    norm_factor = integrate_single_pdf(
-        pdf=lambda t: crystal_ball(t, mu, sigma, beta, m),
-        lower=x_lower,
-        upper=x_upper,
-    )
-    return pdf / norm_factor
+def exponential_decay(x: float, lam: float) -> float:
+    """Exponential decay PDF."""
+    return lam * np.exp(-lam * x)
 
 
-def exponential_decay(y: float | np.ndarray, lam: float) -> np.ndarray:
-    """Computes the exponential decay PDF.
-
-    Parameters:
-        y (float | np.ndarray): Input values.
-        lam (float): Rate parameter of the exponential distribution.
-
-    Returns:
-        np.ndarray: The PDF values.
-    """
-    return lam * np.exp(-lam * y)
+def truncated_gaussian(x: float, mu: float, sigma: float, lower: float, upper: float) -> float:
+    """Truncated Gaussian PDF."""
+    norm_factor = norm.cdf(upper, mu, sigma) - norm.cdf(lower, mu, sigma)
+    return norm.pdf(x, mu, sigma) / norm_factor
 
 
-def exponential_decay_inverse_normalisation(
-    lam: float,
-    lower: float,
-    upper: float,
-) -> float:
-    """Computes the inverse normalisation constant (N^-1) for the truncated exponential decay.
-
-    Parameters:
-        lam (float): Rate parameter of the exponential distribution.
-        lower (float): Lower bound of the truncation range.
-        upper (float): Upper bound of the truncation range.
-
-    Returns:
-        float: The inverse normalisation constant N^-1.
-    """
-    # Compute the integral of the exponential decay over the range analytically
-    integral = np.exp(-lam * lower) - np.exp(-lam * upper)
-    # Return the inverse of the integral as the normalisation constant
-    return 1 / integral
+def custom_uniform(x: float, x_lower: float, x_upper: float) -> float:
+    """Custom uniform PDF."""
+    scale = x_upper - x_lower
+    return scipy_uniform.pdf(x, loc=x_lower, scale=scale)
 
 
-def truncated_exponential_decay(
-    y: float | np.ndarray,
-    lam: float,
-    y_lower: float,
-    y_upper: float,
-) -> np.ndarray:
-    """Computes the truncated exponential decay PDF normalized over the specified range.
-
-    Parameters:
-        y (float | np.ndarray): Input values.
-        lam (float): Rate parameter of the exponential distribution.
-        lower (float): Lower bound of the truncation range.
-        upper (float): Upper bound of the truncation range.
-
-    Returns:
-        np.ndarray: The normalized PDF values.
-    """
-    # Compute the inverse normalization constant
-    inverse_norm = exponential_decay_inverse_normalisation(lam=lam, lower=y_lower, upper=y_upper)
-    # Compute the exponential decay values
-    pdf = exponential_decay(y, lam)
-    # Normalize the PDF
-    return pdf * inverse_norm
+# Pre-defined PDFs
+def g_s_pdf(params: dict) -> PDF:
+    """Truncated Crystal Ball PDF (g_s(X))."""
+    return PDF(
+        func=lambda x: crystal_ball(
+            x=x,
+            mu=params["mu"],
+            sigma=params["sigma"],
+            beta=params["beta"],
+            m=params["m"],
+        ),
+        bounds=[BOUNDS_X],
+    ).normalise()
 
 
-def uniform_pdf(x: float | np.ndarray) -> np.ndarray:
-    """Computes the uniform distribution PDF over a specified range."""
-    return uniform.pdf(x, loc=X_LOWER, scale=X_UPPER - X_LOWER)
+def h_s_pdf(params: dict) -> PDF:
+    """Truncated exponential decay PDF (h_s(Y))."""
+    return PDF(
+        func=lambda x: exponential_decay(x=x, lam=params["lam"]),
+        bounds=[BOUNDS_Y],
+    ).normalise()
 
 
-def truncated_gaussian_pdf(
-    y: float | np.ndarray,
-    mu: float,
-    sigma: float,
-) -> np.ndarray:
-    """Computes the truncated Gaussian PDF normalised over the specified range."""
-    norm_factor = norm.cdf(Y_UPPER, mu, sigma) - norm.cdf(Y_LOWER, mu, sigma)
-    pdf = norm.pdf(y, mu, sigma)
-    return pdf / norm_factor
+def g_b_pdf() -> PDF:
+    """Uniform PDF (g_b(X))."""
+    return PDF(
+        func=lambda x: custom_uniform(x=x, x_lower=BOUNDS_X[0], x_upper=BOUNDS_X[1]),
+        bounds=[BOUNDS_X],
+    ).normalise()
 
 
-def signal_pdf(
-    x: float | np.ndarray,
-    y: float | np.ndarray,
-    params: dict,
-    x_lower: float,
-    x_upper: float,
-    y_lower: float,
-    y_upper: float,
-) -> np.ndarray:
-    """Computes the signal PDF as a product of a truncated Crystal Ball and exponential decay."""
-    gs_x = truncated_crystal_ball(
-        x,
-        params["mu"],
-        params["sigma"],
-        params["beta"],
-        params["m"],
-        x_lower=x_lower,
-        x_upper=x_upper,
-    )
-    hs_y = truncated_exponential_decay(y, params["lambda"], y_lower=y_lower, y_upper=y_upper)
-    return gs_x * hs_y
-
-
-def background_pdf(
-    x: float | np.ndarray,
-    y: float | np.ndarray,
-    params: dict,
-) -> np.ndarray:
-    """Computes the background PDF as a product of a uniform distribution and a truncated Gaussian."""
-    gb_x = uniform_pdf(x)
-    hb_y = truncated_gaussian_pdf(y, params["mu_b"], params["sigma_b"])
-    return gb_x * hb_y
-
-
-def total_pdf(
-    x: float | np.ndarray,
-    y: float | np.ndarray,
-    params: dict,
-    y_lower: float,
-    y_upper: float,
-    x_lower: float,
-    x_upper: float,
-) -> np.ndarray:
-    """Computes the total PDF as a weighted sum of signal and background PDFs."""
-    f = params["f"]
-    signal = signal_pdf(
-        x=x,
-        y=y,
-        params=params,
-        y_lower=y_lower,
-        y_upper=y_upper,
-        x_lower=x_lower,
-        x_upper=x_upper,
-    )
-    background = background_pdf(x, y, params)
-    return f * signal + (1 - f) * background
+def h_b_pdf(params: dict) -> PDF:
+    """Truncated Gaussian PDF (h_b(Y))."""
+    return PDF(
+        func=lambda y: truncated_gaussian(
+            y,
+            params["mu_b"],
+            params["sigma_b"],
+            BOUNDS_Y[0],
+            BOUNDS_Y[1],
+        ),
+        bounds=[BOUNDS_Y],
+    ).normalise()
