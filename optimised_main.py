@@ -1,217 +1,198 @@
 """Main script for analysis."""
 
-# %% Imports and setup
+# %%
+# ? Imports and setup
 from __future__ import annotations
 
-import matplotlib.pyplot as plt
-import numpy as np
 from loguru import logger
-from numba_stats.crystalball import pdf as crystal_ball_pdf
-from numba_stats.expon import pdf as expon_pdf
-from numba_stats.truncnorm import pdf as truncnorm_pdf
-from numba_stats.uniform import pdf as uniform_pdf
-from scipy.integrate import nquad
+from scipy.integrate import dblquad
+from scipy.stats import crystalball, expon, truncnorm, uniform
 
 # %%
-# ? Choose params Parameters
-
-params = {
-    "mu": 3,
-    "sigma": 0.3,
-    "beta": 1,
-    "m": 1.4,
-    "f": 0.6,
-    "lam": 0.3,
-    "mu_b": 0,
-    "sigma_b": 2.5,
-}
-
-BOUNDS_X = (0, 5)
-BOUNDS_Y = (0, 10)
+# ? Constants
+BOUNDS_X: tuple[float, float] = (0, 5)
+BOUNDS_Y: tuple[float, float] = (0, 10)
 
 # %%
 # ? Define PDFs
 
 
-# 1D PDFs for X and Y
-def g_s(x: float) -> float:
-    """Truncated Crystal Ball PDF."""
-    return crystal_ball_pdf(
-        x,
-        loc=params["mu"],
-        scale=params["sigma"],
-        beta=params["beta"],
-        m=params["m"],
-    )
+def g_s(x: float, mu: float, sigma: float, beta: float, m: float) -> float:
+    """Crystal Ball PDF.
+
+    Args:
+        x: Input variable.
+        mu: Mean of the distribution.
+        sigma: Standard deviation of the distribution.
+        beta: Tail parameter.
+        m: Exponent parameter.
+
+    Returns:
+        Probability density value.
+    """
+    return crystalball.pdf(x, beta=beta, m=m, loc=mu, scale=sigma)
 
 
-def h_s(y: float) -> float:
-    """Truncated exponential decay PDF."""
-    return expon_pdf(y, 0, 1 / params["lam"])  # Positional arguments for loc and scale
+def h_s(y: float, lam: float) -> float:
+    """Exponential PDF.
+
+    Args:
+        y: Input variable.
+        lam: Rate parameter.
+
+    Returns:
+        Probability density value.
+    """
+    return expon.pdf(y, loc=0, scale=1 / lam)
 
 
-def g_b(x: float) -> float:
-    """Uniform PDF."""
-    return uniform_pdf(
-        x,
-        BOUNDS_X[0],
-        BOUNDS_X[1] - BOUNDS_X[0],
-    )  # Positional arguments for loc and scale
+def g_b(x: float, x_min: float, x_range: float) -> float:
+    """Uniform PDF.
+
+    Args:
+        x: Input variable.
+        x_min: Minimum value.
+        x_range: Range (max - min).
+
+    Returns:
+        Probability density value.
+    """
+    return uniform.pdf(x, loc=x_min, scale=x_range)
 
 
-def h_b(y: float) -> float:
-    """Truncated Gaussian PDF."""
-    a = (BOUNDS_Y[0] - params["mu_b"]) / params["sigma_b"]
-    b = (BOUNDS_Y[1] - params["mu_b"]) / params["sigma_b"]
-    return truncnorm_pdf(
-        y,
-        a,
-        b,
-        params["mu_b"],
-        params["sigma_b"],
-    )  # Positional arguments for a, b, loc, scale
+def h_b(y: float, mu_b: float, sigma_b: float, y_min: float, y_max: float) -> float:
+    """Truncated Normal PDF.
+
+    Args:
+        y: Input variable.
+        mu_b: Mean of the distribution.
+        sigma_b: Standard deviation of the distribution.
+        y_min: Minimum truncation bound.
+        y_max: Maximum truncation bound.
+
+    Returns:
+        Probability density value.
+    """
+    a: float = (y_min - mu_b) / sigma_b
+    b: float = (y_max - mu_b) / sigma_b
+    return truncnorm.pdf(y, a=a, b=b, loc=mu_b, scale=sigma_b)
+
+
+def signal(x: float, y: float, mu: float, sigma: float, beta: float, m: float, lam: float) -> float:  # noqa: PLR0913
+    """Signal PDF.
+
+    Args:
+        x: X coordinate.
+        y: Y coordinate.
+        mu: Mean of the signal distribution.
+        sigma: Standard deviation of the signal distribution.
+        beta: Signal tail parameter.
+        m: Signal exponent parameter.
+        lam: Signal decay rate.
+
+    Returns:
+        Signal probability density value.
+    """
+    return g_s(x, mu, sigma, beta, m) * h_s(y, lam)
+
+
+def background(x: float, y: float, mu_b: float, sigma_b: float) -> float:
+    """Background PDF.
+
+    Args:
+        x: X coordinate.
+        y: Y coordinate.
+        mu_b: Background mean.
+        sigma_b: Background standard deviation.
+
+    Returns:
+        Background probability density value.
+    """
+    return g_b(x, *BOUNDS_X) * h_b(y, mu_b, sigma_b, *BOUNDS_Y)
+
+
+def total_pdf(  # noqa: PLR0913
+    x: float,
+    y: float,
+    f: float,
+    mu: float,
+    sigma: float,
+    beta: float,
+    m: float,
+    lam: float,
+    mu_b: float,
+    sigma_b: float,
+) -> float:
+    """Total combined PDF.
+
+    Args:
+        x: X coordinate.
+        y: Y coordinate.
+        f: Signal fraction.
+        mu: Mean of the signal distribution.
+        sigma: Standard deviation of the signal distribution.
+        beta: Signal tail parameter.
+        m: Signal exponent parameter.
+        lam: Signal decay rate.
+        mu_b: Background mean.
+        sigma_b: Background standard deviation.
+
+    Returns:
+        Combined probability density value.
+    """
+    return f * signal(x, y, mu, sigma, beta, m, lam) + (1 - f) * background(x, y, mu_b, sigma_b)
 
 
 # %%
-# ? 2D PDFs and Combined Model
+# ? Normalisation calculations
 
+# Assign parameters directly to variables
+mu = 3
+sigma = 0.3
+beta = 1
+m = 1.4
+f = 0.6
+lam = 0.3
+mu_b = 0
+sigma_b = 2.5
 
-def signal(x: float, y: float) -> float:
-    """Signal 2D PDF."""
-    return g_s(x) * h_s(y)
+# Compute the normalizations
+signal_norm, _ = dblquad(
+    lambda y, x: signal(x=x, y=y, mu=mu, sigma=sigma, beta=beta, m=m, lam=lam),
+    BOUNDS_X[0],
+    BOUNDS_X[1],
+    lambda _: BOUNDS_Y[0],
+    lambda _: BOUNDS_Y[1],
+)
 
+background_norm, _ = dblquad(
+    lambda y, x: background(x=x, y=y, mu_b=mu_b, sigma_b=sigma_b),
+    BOUNDS_X[0],
+    BOUNDS_X[1],
+    lambda _: BOUNDS_Y[0],
+    lambda _: BOUNDS_Y[1],
+)
 
-def background(x: float, y: float) -> float:
-    """Background 2D PDF."""
-    return g_b(x) * h_b(y)
+total_norm, _ = dblquad(
+    lambda y, x: total_pdf(
+        x=x,
+        y=y,
+        f=f,
+        mu=mu,
+        sigma=sigma,
+        beta=beta,
+        m=m,
+        lam=lam,
+        mu_b=mu_b,
+        sigma_b=sigma_b,
+    ),
+    BOUNDS_X[0],
+    BOUNDS_X[1],
+    lambda _: BOUNDS_Y[0],
+    lambda _: BOUNDS_Y[1],
+)
 
-
-def total_pdf(f: float) -> callable:
-    """Total combined PDF."""
-
-    def total_func(x: float, y: float) -> float:
-        return f * signal(x, y) + (1 - f) * background(x, y)
-
-    return total_func
-
-
-total = total_pdf(f=params["f"])
-
-pdf_dict = {
-    "g_s(X)": g_s,
-    "h_s(Y)": h_s,
-    "g_b(X)": g_b,
-    "h_b(Y)": h_b,
-    "Signal": signal,
-    "Background": background,
-    "Total": total,
-}
-
-# %%
-# ? Normalisation Checks
-
-
-def integrate_pdf(pdf: callable, bounds: list[tuple]) -> float:
-    """Integrate a given PDF over its bounds."""
-    return nquad(pdf, bounds)[0]
-
-
-for name, pdf in pdf_dict.items():
-    bounds = (
-        [BOUNDS_X, BOUNDS_Y]
-        if name in ["Signal", "Background", "Total"]
-        else [BOUNDS_X if name.startswith("g_") else BOUNDS_Y]
-    )
-    norm = integrate_pdf(pdf, bounds)
-    logger.info(f"Normalisation of {name}: {norm:.6f}")
-
-# %%
-# %% Evaluate and Plot the PDFs
-
-
-# Define ranges for X and Y
-x_range = np.linspace(BOUNDS_X[0], BOUNDS_X[1], 500)
-y_range = np.linspace(BOUNDS_Y[0], BOUNDS_Y[1], 500)
-
-fixed_y = BOUNDS_Y[1] / 2
-fixed_x = BOUNDS_X[1] / 2
-
-# Evaluate individual PDFs
-gs_data = [g_s(x) for x in x_range]
-hs_data = [h_s(y) for y in y_range]
-gb_data = [g_b(x) for x in x_range]
-hb_data = [h_b(y) for y in y_range]
-
-# Evaluate combined PDFs
-signal_x = [signal(x, fixed_y) for x in x_range]
-signal_y = [signal(fixed_x, y) for y in y_range]
-
-background_x = [background(x, fixed_y) for x in x_range]
-background_y = [background(fixed_x, y) for y in y_range]
-
-total_x = [total(x, fixed_y) for x in x_range]
-total_y = [total(fixed_x, y) for y in y_range]
-
-# %%
-# ? Plot Individual PDFs
-
-plt.figure(figsize=(8, 6))
-plt.plot(x_range, gs_data, label="$g_s(X)$ (Crystal Ball)")
-plt.plot(x_range, gb_data, label="$g_b(X)$ (Uniform)")
-plt.title("Individual PDFs in X")
-plt.xlabel("X")
-plt.ylabel("Probability Density")
-plt.legend()
-plt.grid()
-plt.show()
-
-plt.figure(figsize=(8, 6))
-plt.plot(y_range, hs_data, label="$h_s(Y)$ (Exponential Decay)")
-plt.plot(y_range, hb_data, label="$h_b(Y)$ (Truncated Normal)")
-plt.title("Individual PDFs in Y")
-plt.xlabel("Y")
-plt.ylabel("Probability Density")
-plt.legend()
-plt.grid()
-plt.show()
-
-# %%
-# ? Plot Combined PDFs
-
-plt.figure(figsize=(8, 6))
-plt.plot(x_range, signal_x, label="Signal in X")
-plt.plot(x_range, background_x, label="Background in X")
-plt.plot(x_range, total_x, label="Total in X")
-plt.title(f"1D Projection in X for Y={fixed_y}")
-plt.xlabel("X")
-plt.ylabel("Probability Density")
-plt.legend()
-plt.grid()
-plt.show()
-
-plt.figure(figsize=(8, 6))
-plt.plot(y_range, signal_y, label="Signal in Y")
-plt.plot(y_range, background_y, label="Background in Y")
-plt.plot(y_range, total_y, label="Total in Y")
-plt.title(f"1D Projection in Y for X={fixed_x}")
-plt.xlabel("Y")
-plt.ylabel("Probability Density")
-plt.legend()
-plt.grid()
-plt.show()
-
-# %%
-# ? 2D Joint Probability Density
-
-x_grid, y_grid = np.meshgrid(x_range, y_range)
-joint_pdf = np.array([[total(x, y) for x in x_range] for y in y_range])
-
-plt.figure(figsize=(10, 8))
-contour = plt.contourf(x_grid, y_grid, joint_pdf, levels=50, cmap="viridis")
-plt.colorbar(contour, label="Probability Density")
-plt.title("2D Joint Probability Density")
-plt.xlabel("X")
-plt.ylabel("Y")
-plt.grid(visible=False)
-plt.show()
+logger.info(f"Normalisation of Signal: {signal_norm:.6f}")
+logger.info(f"Normalisation of Background: {background_norm:.6f}")
+logger.info(f"Normalisation of Total: {total_norm:.6f}")
 # %%
