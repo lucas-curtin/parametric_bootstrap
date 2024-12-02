@@ -17,6 +17,7 @@ dependencies = [
     "pytest",
     "loguru",
     "iminuit",
+    "numba_stats",
 ]
 
 [tool.setuptools_scm]
