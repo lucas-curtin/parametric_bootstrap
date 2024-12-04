@@ -1,13 +1,19 @@
 """Optimised main running script with array inputs."""
 
 # %%
+from __future__ import annotations
+
 from math import erf, pi, sqrt
+from timeit import timeit
 
 import matplotlib.pyplot as plt
 import numpy as np
+from iminuit import Minuit
+from iminuit.cost import ExtendedUnbinnedNLL
 from loguru import logger
 from numba import jit
 from scipy.integrate import dblquad, quad
+from scipy.stats import poisson
 
 
 # %%
@@ -335,5 +341,187 @@ cbar.set_label("Density")
 plt.tight_layout()
 plt.show()
 
+# %%
+# ? Generation Timings
 
+
+def generate_sample_from_total_pdf(
+    n_events: int,
+    params: dict,
+    f: float,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Generate events from the total PDF."""
+    x = rng.uniform(low=BOUNDS_X[0], high=BOUNDS_X[1], size=n_events)
+    y = rng.uniform(low=BOUNDS_Y[0], high=BOUNDS_Y[1], size=n_events)
+    pdf_values = total_pdf(x=x, y=y, f=f, params=params)
+    max_pdf_value = np.max(pdf_values)
+
+    sampled_x = []
+    sampled_y = []
+
+    for i in range(n_events):
+        x_rand = rng.uniform(low=BOUNDS_X[0], high=BOUNDS_X[1])
+        y_rand = rng.uniform(low=BOUNDS_Y[0], high=BOUNDS_Y[1])
+        p_rand = rng.uniform(low=0, high=max_pdf_value)
+
+        if p_rand <= total_pdf(x=np.array([x_rand]), y=np.array([y_rand]), f=f, params=params):
+            sampled_x.append(x_rand)
+            sampled_y.append(y_rand)
+
+    return np.array(sampled_x), np.array(sampled_y)
+
+
+def total_pdf_wrapper(  # noqa: PLR0913
+    xy: tuple[np.ndarray, np.ndarray],
+    mu: float,
+    sigma: float,
+    beta: float,
+    m: float,
+    f: float,
+    lam: float,
+    mu_b: float,
+    sigma_b: float,
+) -> tuple[float, np.ndarray]:
+    """Wrapper for the total PDF."""
+    x, y = xy
+    params = {
+        "g_s": {
+            "mu": mu,
+            "sigma": sigma,
+            "beta": beta,
+            "m": m,
+            "x_min": BOUNDS_X[0],
+            "x_max": BOUNDS_X[1],
+        },
+        "h_s": {"lam": lam, "y_min": BOUNDS_Y[0], "y_max": BOUNDS_Y[1]},
+        "g_b": {"x_min": BOUNDS_X[0], "x_max": BOUNDS_X[1]},
+        "h_b": {"mu": mu_b, "sigma": sigma_b, "y_min": BOUNDS_Y[0], "y_max": BOUNDS_Y[1]},
+    }
+    pdf_values = total_pdf(x=x, y=y, f=f, params=params)
+    return len(x), pdf_values
+
+
+def perform_fit() -> None:
+    """Complete minuit fit."""
+    sampled_x, sampled_y = generate_sample_from_total_pdf(
+        n_events=n_events,
+        params=params,
+        f=f,
+        rng=rng,
+    )
+    nll = ExtendedUnbinnedNLL((sampled_x, sampled_y), total_pdf_wrapper)
+    minuit = Minuit(
+        nll,
+        mu=mu,
+        sigma=sigma,
+        beta=beta,
+        m=m,
+        f=f,
+        lam=lam,
+        mu_b=mu_b,
+        sigma_b=sigma_b,
+    )
+    minuit.limits["beta"] = (0, None)
+    minuit.limits["m"] = (1, None)
+    minuit.migrad()
+    minuit.hesse()
+
+
+rng = np.random.default_rng(seed=451)
+n_events = 100_000
+
+n_runs = 100
+
+
+normal_time = timeit(lambda: rng.normal(size=n_events), number=n_runs) / n_runs
+
+
+sample_generation_time = (
+    timeit(
+        lambda: generate_sample_from_total_pdf(
+            n_events=n_events,
+            params=params,
+            f=f,
+            rng=rng,
+        ),
+        number=n_runs,
+    )
+    / n_runs
+)
+
+
+fit_time = timeit(perform_fit, number=n_runs) / n_runs
+
+# Results
+relative_generation_time = sample_generation_time / normal_time
+relative_fit_time = fit_time / normal_time
+
+logger.info(f"Benchmark Results (averaged over {n_runs} runs):")
+logger.info(f"(i) np.random.normal: {normal_time:.6f} s")
+logger.info(
+    f"(ii) Sample generation: {sample_generation_time:.6f} s (relative: {relative_generation_time:.2f})",  # noqa: E501
+)
+logger.info(f"(iii) Fit execution: {fit_time:.6f} s (relative: {relative_fit_time:.2f})")
+# %%
+# ? Lam test
+true_params = {
+    "lam": 0.3,
+    "mu": 3,
+    "sigma": 0.3,
+    "beta": 1,
+    "m": 1.4,
+    "f": 0.6,
+    "mu_b": 0,
+    "sigma_b": 2.5,
+}
+
+sample_sizes = [500, 1000, 2500, 5000, 10000]
+n_bootstrap = 250
+
+# Store results
+results = {size: {"lambda_estimates": [], "sample_sizes": []} for size in sample_sizes}
+
+# Generate and fit function
+rng = np.random.default_rng(seed=42)
+
+
+def fit_data(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    """Fit the model to the data and return the estimate for lambda and its uncertainty."""
+
+    def pdf_wrapper(xy: tuple[np.ndarray, np.ndarray], lam: float) -> np.ndarray:
+        """Wrapper for the total PDF to evaluate it for given lambda."""
+        params = true_params.copy()
+        params["lam"] = lam
+        x, y = xy
+        return total_pdf(x, y, f=true_params["f"], params=params)
+
+    nll = ExtendedUnbinnedNLL((x, y), pdf_wrapper)
+    minuit = Minuit(nll, lam=true_params["lam"])
+    minuit.limits["lam"] = (0, None)
+    minuit.migrad()
+    return minuit.to_numpy()["lam"], minuit.errors["lam"]
+
+
+for size in sample_sizes:
+    for _ in range(n_bootstrap):
+        # Sample size with Poisson variation
+        actual_size = poisson.rvs(size, random_state=rng)
+        results[size]["sample_sizes"].append(actual_size)
+
+        # Generate data
+        x, y = generate_sample_from_total_pdf(actual_size, params, f, rng)
+
+        # Fit data
+        lam_est, lam_err = fit_data(x, y)
+        results[size]["lambda_estimates"].append(lam_est)
+
+# Calculate bias and uncertainty
+bias = []
+uncertainty = []
+
+for size in sample_sizes:
+    lam_estimates = results[size]["lambda_estimates"]
+    bias.append(np.mean(lam_estimates) - true_params["lam"])
+    uncertainty.append(np.std(lam_estimates))
 # %%
