@@ -4,113 +4,16 @@
 from __future__ import annotations
 
 from functools import partial
-from math import erf, pi, sqrt
 from timeit import timeit
 
 import matplotlib.pyplot as plt
 import numpy as np
+import statistical_models.pdfs as pdf
 from iminuit import Minuit
 from iminuit.cost import ExtendedUnbinnedNLL
 from loguru import logger
-from numba import njit
 from scipy.integrate import dblquad, quad
 from sweights import SWeight
-
-
-# %%
-# ? Core funcs
-@njit
-def normal_cdf(x: float) -> float:
-    """CDF of a standard normal distribution."""
-    return 0.5 * (1 + erf(x / sqrt(2)))
-
-
-@njit
-def g_s_base(
-    x: np.ndarray,
-    mu: float,
-    sigma: float,
-    beta: float,
-    m: float,
-    x_min: float,
-    x_max: float,
-) -> np.ndarray:
-    """Normalized Truncated Crystal Ball PDF."""
-    pdf = np.zeros_like(x)
-
-    z = (x - mu) / sigma
-    out_of_bounds = (x < x_min) | (x > x_max)
-    pdf[out_of_bounds] = 0.0
-
-    beta_plus = (z > -beta) & ~out_of_bounds
-    pdf[beta_plus] = np.exp(-(z[beta_plus] ** 2) / 2)
-
-    beta_minus = (z <= -beta) & ~out_of_bounds
-    a = ((m / beta) ** m) * np.exp(-(beta**2) / 2)
-    b = (m / beta) - beta
-    pdf[beta_minus] = a * (b - z[beta_minus]) ** (-m)
-
-    z_min = (x_min - mu) / sigma
-    z_max = (x_max - mu) / sigma
-
-    gauss_contrib = 0
-    if z_max > beta:
-        gauss_min = max(-beta, z_min)
-        gauss_max = z_max
-        gauss_contrib = sqrt(2 * pi) * (normal_cdf(gauss_max) - normal_cdf(gauss_min))
-    tail_contrib = 0.0
-
-    if z_min <= -beta:
-        tail_min = z_min
-        tail_max = min(z_max, -beta)
-
-        u_min = m / beta - beta - tail_min
-        u_max = m / beta - beta - tail_max
-
-        c = ((m / beta) ** m) * np.exp(-(beta**2) / 2)
-
-        tail_contrib = (c / (m - 1)) * (u_max ** (1 - m) - u_min ** (1 - m))
-
-    normalisation = sigma * (gauss_contrib + tail_contrib)
-    return pdf / normalisation
-
-
-@njit
-def h_s_base(y: np.ndarray, lam: float, y_min: float, y_max: float) -> np.ndarray:
-    """Normalised Truncated Exponential PDF."""
-    pdf = np.zeros_like(y)
-    within_bounds = (y >= y_min) & (y <= y_max)
-    y = y[within_bounds]
-    normalisation = np.exp(-lam * y_min) - np.exp(-lam * y_max)
-    trunc_pdf = lam * np.exp(-lam * y) / normalisation
-    pdf[within_bounds] = trunc_pdf
-    return pdf
-
-
-@njit
-def g_b_base(x: np.ndarray, x_min: float, x_max: float) -> np.ndarray:
-    """Normalised Truncated Uniform PDF."""
-    pdf = np.zeros_like(x)
-    within_bounds = (x >= x_min) & (x <= x_max)
-    normalisation = x_max - x_min
-    pdf[within_bounds] = 1.0 / normalisation
-    return pdf
-
-
-@njit
-def h_b_base(y: np.ndarray, mu: float, sigma: float, y_min: float, y_max: float) -> np.ndarray:
-    """Normalised Truncated Normal PDF."""
-    pdf = np.zeros_like(y)
-    within_bounds = (y >= y_min) & (y <= y_max)
-    y = y[within_bounds]
-    z_min = (y_min - mu) / sigma
-    z_max = (y_max - mu) / sigma
-    normalisation = normal_cdf(z_max) - normal_cdf(z_min)
-    z = (y - mu) / sigma
-    trunc_pdf = np.exp(-(z**2) / 2) / (sigma * np.sqrt(2 * np.pi) * normalisation)
-    pdf[within_bounds] = trunc_pdf
-    return pdf
-
 
 # %%
 # ? Parameters
@@ -127,10 +30,18 @@ BOUNDS_X = [0, 5]
 BOUNDS_Y = [0, 10]
 
 # Define partial functions for each PDF
-g_s = partial(g_s_base, mu=mu, sigma=sigma, beta=beta, m=m, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
-h_s = partial(h_s_base, lam=lam, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
-g_b = partial(g_b_base, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
-h_b = partial(h_b_base, mu=mu_b, sigma=sigma_b, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
+g_s = partial(
+    pdf.g_s_base,
+    mu=mu,
+    sigma=sigma,
+    beta=beta,
+    m=m,
+    x_min=BOUNDS_X[0],
+    x_max=BOUNDS_X[1],
+)
+h_s = partial(pdf.h_s_base, lam=lam, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
+g_b = partial(pdf.g_b_base, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
+h_b = partial(pdf.h_b_base, mu=mu_b, sigma=sigma_b, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
 
 
 # %%
@@ -381,7 +292,7 @@ def total_pdf_sampler(
     return np.array(accepted_x[:n_events]), np.array(accepted_y[:n_events])
 
 
-def total_pdf_wrapper(
+def total_pdf_wrapper(  # noqa: PLR0913
     xy: tuple[np.ndarray, np.ndarray],
     mu: float,
     sigma: float,
@@ -397,7 +308,7 @@ def total_pdf_wrapper(
 
     # Update partials if parameters change during fitting
     g_s = partial(
-        g_s_base,
+        pdf.g_s_base,
         mu=mu,
         sigma=sigma,
         beta=beta,
@@ -405,9 +316,9 @@ def total_pdf_wrapper(
         x_min=BOUNDS_X[0],
         x_max=BOUNDS_X[1],
     )
-    h_s = partial(h_s_base, lam=lam, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
-    g_b = partial(g_b_base, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
-    h_b = partial(h_b_base, mu=mu_b, sigma=sigma_b, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
+    h_s = partial(pdf.h_s_base, lam=lam, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
+    g_b = partial(pdf.g_b_base, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
+    h_b = partial(pdf.h_b_base, mu=mu_b, sigma=sigma_b, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
 
     # Compute PDF values
     pdf_values = f * (g_s(x) * h_s(y)) + (1 - f) * (g_b(x) * h_b(y))
@@ -516,21 +427,21 @@ for n_events in sample_sizes:
 
 
 # Calculate bias and uncertainty from results dictionary
-bias_results = [np.mean(lam_results[size]["values"]) - lam for size in sample_sizes]
-uncertainty_results = [np.mean(lam_results[size]["errors"]) for size in sample_sizes]
+bias = [np.mean(lam_results[size]["values"]) - lam for size in sample_sizes]
+uncertainty = [np.mean(lam_results[size]["errors"]) for size in sample_sizes]
 
 # Plot results
 fig, axs = plt.subplots(1, 2, figsize=(14, 6))
 
 # Bias plot
-axs[0].plot(sample_sizes, bias_results, marker="o")
+axs[0].plot(sample_sizes, bias, marker="o")
 axs[0].set_title("Bias in λ vs Sample Size")
 axs[0].set_xlabel("Sample Size")
 axs[0].set_ylabel("Bias")
 axs[0].grid(visible=True)
 
 # Uncertainty plot
-axs[1].plot(sample_sizes, uncertainty_results, marker="o")
+axs[1].plot(sample_sizes, uncertainty, marker="o")
 axs[1].set_title("Uncertainty in λ vs Sample Size")
 axs[1].set_xlabel("Sample Size")
 axs[1].set_ylabel("Uncertainty")
@@ -546,85 +457,116 @@ plt.show()
 
 def nll_x(mu: float, sigma: float, beta: float, m: float, f: float) -> float:
     """Negative log-likelihood for fitting in X."""
-    signal_pdf = g_s_base(sampled_x, mu, sigma, beta, m, BOUNDS_X[0], BOUNDS_X[1])
-    background_pdf = g_b_base(sampled_x, BOUNDS_X[0], BOUNDS_X[1])
+    signal_pdf = pdf.g_s_base(sampled_x, mu, sigma, beta, m, BOUNDS_X[0], BOUNDS_X[1])
+    background_pdf = pdf.g_b_base(sampled_x, BOUNDS_X[0], BOUNDS_X[1])
     total_pdf_x = f * signal_pdf + (1 - f) * background_pdf
     return -np.sum(np.log(total_pdf_x))
 
 
-sampled_x, sampled_y = total_pdf_sampler(
-    n_events=5000,  # Use Poisson-varied sample size
-    f=f,
-    rng=rng,
-)
+weighted_lam_results = {size: {"values": [], "errors": []} for size in sample_sizes}
+
+for n_events in sample_sizes:
+    sampled_x, sampled_y = total_pdf_sampler(
+        n_events=n_events,  # Use Poisson-varied sample size
+        f=f,
+        rng=rng,
+    )
+
+    # Set up Minuit for the extended fit
+    minuit_x = Minuit(
+        nll_x,
+        mu=mu,
+        sigma=sigma,
+        beta=beta,
+        m=m,
+        f=f,
+    )
+    minuit_x.limits["beta"] = (0, None)  # Ensure beta > 0
+    minuit_x.limits["m"] = (1, None)  # Ensure m > 1
+    minuit_x.limits["f"] = (0, 1)  # Signal fraction must be between 0 and 1
+    minuit_x.migrad()
+    minuit_x.hesse()
+
+    # Extract fit parameters
+    fit_params_x = minuit_x.values  # noqa: PD011
+    fit_signal_fraction = fit_params_x["f"]
+    fit_signal_count = fit_signal_fraction * len(sampled_x)
+    fit_background_count = (1 - fit_signal_fraction) * len(sampled_x)
+
+    # Create the sweighter using spdf and bpdf
+    sweighter = SWeight(
+        data=sampled_x,  # Dataset (reshaped if necessary)
+        pdfs=[
+            lambda x,
+            mu=fit_params_x["mu"],
+            sigma=fit_params_x["sigma"],
+            beta=fit_params_x["beta"],
+            m=fit_params_x["m"]: pdf.g_s_base(
+                np.atleast_1d(x),
+                mu,
+                sigma,
+                beta,
+                m,
+                BOUNDS_X[0],
+                BOUNDS_X[1],
+            ),
+            lambda x: pdf.g_b_base(np.atleast_1d(x), BOUNDS_X[0], BOUNDS_X[1]),
+        ],  # Signal and background PDFs
+        yields=[fit_signal_count, fit_background_count],  # Signal and background yields
+        discvarranges=[(BOUNDS_X[0], BOUNDS_X[1])],
+        method="summation",
+        compnames=["sig", "bkg"],
+        verbose=True,
+        checks=True,
+    )
+
+    # Retrieve signal weights
+    signal_weights = sweighter.get_weight(0, sampled_x)
+
+    # Perform a weighted fit in Y to extract lambda
+    def nll_y_weighted(lam: float) -> float:
+        """Weighted negative log-likelihood for fitting in Y."""
+        pdf_y = pdf.h_s_base(sampled_y, lam, BOUNDS_Y[0], BOUNDS_Y[1])  # noqa: B023
+        weighted_log_likelihood = signal_weights * np.log(pdf_y)  # noqa: B023
+        return -np.sum(weighted_log_likelihood)
+
+    # Set up Minuit for the weighted fit in Y
+    minuit_y_weighted = Minuit(nll_y_weighted, lam=lam)
+    minuit_y_weighted.limits["lam"] = (0, None)  # Decay constant lambda must be > 0
+    minuit_y_weighted.migrad()
+    minuit_y_weighted.hesse()
+
+    weighted_lam_results[n_events]["values"].append(minuit_y_weighted.values["lam"])  # noqa: PD011
+    weighted_lam_results[n_events]["errors"].append(minuit_y_weighted.errors["lam"])
 
 
-# Set up Minuit for the extended fit
-minuit_x = Minuit(
-    nll_x,
-    mu=mu,
-    sigma=sigma,
-    beta=beta,
-    m=m,
-    f=f,
-)
-minuit_x.limits["beta"] = (0, None)  # Ensure beta > 0
-minuit_x.limits["m"] = (1, None)  # Ensure m > 1
-minuit_x.limits["f"] = (0, 1)  # Signal fraction must be between 0 and 1
-minuit_x.migrad()
-minuit_x.hesse()
-
-# Extract fit parameters
-fit_params_x = minuit_x.values  # noqa: PD011
-fit_signal_fraction = fit_params_x["f"]
-fit_signal_count = fit_signal_fraction * len(sampled_x)
-fit_background_count = (1 - fit_signal_fraction) * len(sampled_x)
+weighted_bias = [np.mean(weighted_lam_results[size]["values"]) - lam for size in sample_sizes]
+weighted_uncertainty = [np.mean(weighted_lam_results[size]["errors"]) for size in sample_sizes]
 
 
-# Create the sweighter using spdf and bpdf
-sweighter = SWeight(
-    data=sampled_x,  # Dataset (reshaped if necessary)
-    pdfs=[
-        lambda x: g_s_base(
-            np.atleast_1d(x),
-            fit_params_x["mu"],
-            fit_params_x["sigma"],
-            fit_params_x["beta"],
-            fit_params_x["m"],
-            BOUNDS_X[0],
-            BOUNDS_X[1],
-        ),
-        lambda x: g_b_base(np.atleast_1d(x), BOUNDS_X[0], BOUNDS_X[1]),
-    ],  # Signal and background PDFs
-    yields=[fit_signal_count, fit_background_count],  # Signal and background yields
-    discvarranges=[(BOUNDS_X[0], BOUNDS_X[1])],
-    method="summation",
-    compnames=["sig", "bkg"],
-    verbose=True,
-    checks=True,
-)
+# %%
+# Plot lambda results
+fig, axs = plt.subplots(1, 2, figsize=(14, 6))
 
-# Retrieve signal weights
-signal_weights = sweighter.get_weight(0, sampled_x)
+# Bias plot
+axs[0].plot(sample_sizes, bias, marker="o", label="Unweighted")
+axs[0].plot(sample_sizes, weighted_bias, marker="s", label="Weighted")
+axs[0].set_title("Bias in λ vs Sample Size")
+axs[0].set_xlabel("Sample Size")
+axs[0].set_ylabel("Bias")
+axs[0].legend()
+axs[0].grid(visible=True)
 
+# Uncertainty plot
+axs[1].plot(sample_sizes, uncertainty, marker="o", label="Unweighted")
+axs[1].plot(sample_sizes, weighted_uncertainty, marker="s", label="Weighted")
+axs[1].set_title("Uncertainty in λ vs Sample Size")
+axs[1].set_xlabel("Sample Size")
+axs[1].set_ylabel("Uncertainty")
+axs[1].legend()
+axs[1].grid(visible=True)
 
-# Perform a weighted fit in Y to extract lambda
-def nll_y_weighted(lam: float) -> float:
-    """Weighted negative log-likelihood for fitting in Y."""
-    pdf_y = h_s_base(sampled_y, lam, BOUNDS_Y[0], BOUNDS_Y[1])
-    weighted_log_likelihood = signal_weights * np.log(pdf_y)
-    return -np.sum(weighted_log_likelihood)
-
-
-# Set up Minuit for the weighted fit in Y
-minuit_y_weighted = Minuit(nll_y_weighted, lam=lam)
-minuit_y_weighted.limits["lam"] = (0, None)  # Decay constant lambda must be > 0
-minuit_y_weighted.migrad()
-minuit_y_weighted.hesse()
-
-# Extract the λ estimate and uncertainty
-lambda_weighted = minuit_y_weighted.values["lam"]  # noqa: PD011
-lambda_uncertainty = minuit_y_weighted.errors["lam"]
-
+plt.tight_layout()
+plt.show()
 
 # %%
