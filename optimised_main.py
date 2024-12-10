@@ -3,6 +3,7 @@
 # %%
 from __future__ import annotations
 
+from functools import partial
 from math import erf, pi, sqrt
 from timeit import timeit
 
@@ -11,21 +12,20 @@ import numpy as np
 from iminuit import Minuit
 from iminuit.cost import ExtendedUnbinnedNLL
 from loguru import logger
-from numba import jit
+from numba import njit
 from scipy.integrate import dblquad, quad
-from scipy.stats import poisson
 
 
 # %%
 # ? Core funcs
-@jit(nopython=True)
+@njit
 def normal_cdf(x: float) -> float:
     """CDF of a standard normal distribution."""
     return 0.5 * (1 + erf(x / sqrt(2)))
 
 
-@jit(nopython=True)
-def g_s(  # noqa: PLR0913
+@njit
+def g_s_base(
     x: np.ndarray,
     mu: float,
     sigma: float,
@@ -74,8 +74,8 @@ def g_s(  # noqa: PLR0913
     return pdf / normalisation
 
 
-@jit(nopython=True)
-def h_s(y: np.ndarray, lam: float, y_min: float, y_max: float) -> np.ndarray:
+@njit
+def h_s_base(y: np.ndarray, lam: float, y_min: float, y_max: float) -> np.ndarray:
     """Normalised Truncated Exponential PDF."""
     pdf = np.zeros_like(y)
     within_bounds = (y >= y_min) & (y <= y_max)
@@ -86,8 +86,8 @@ def h_s(y: np.ndarray, lam: float, y_min: float, y_max: float) -> np.ndarray:
     return pdf
 
 
-@jit(nopython=True)
-def g_b(x: np.ndarray, x_min: float, x_max: float) -> np.ndarray:
+@njit
+def g_b_base(x: np.ndarray, x_min: float, x_max: float) -> np.ndarray:
     """Normalised Truncated Uniform PDF."""
     pdf = np.zeros_like(x)
     within_bounds = (x >= x_min) & (x <= x_max)
@@ -96,8 +96,8 @@ def g_b(x: np.ndarray, x_min: float, x_max: float) -> np.ndarray:
     return pdf
 
 
-@jit(nopython=True)
-def h_b(y: np.ndarray, mu: float, sigma: float, y_min: float, y_max: float) -> np.ndarray:
+@njit
+def h_b_base(y: np.ndarray, mu: float, sigma: float, y_min: float, y_max: float) -> np.ndarray:
     """Normalised Truncated Normal PDF."""
     pdf = np.zeros_like(y)
     within_bounds = (y >= y_min) & (y <= y_max)
@@ -124,41 +124,34 @@ sigma_b = 2.5
 
 BOUNDS_X = [0, 5]
 BOUNDS_Y = [0, 10]
-params = {
-    "g_s": {
-        "mu": mu,
-        "sigma": sigma,
-        "beta": beta,
-        "m": m,
-        "x_min": BOUNDS_X[0],
-        "x_max": BOUNDS_X[1],
-    },
-    "h_s": {"lam": lam, "y_min": BOUNDS_Y[0], "y_max": BOUNDS_Y[1]},
-    "g_b": {"x_min": BOUNDS_X[0], "x_max": BOUNDS_X[1]},
-    "h_b": {"mu": mu_b, "sigma": sigma_b, "y_min": BOUNDS_Y[0], "y_max": BOUNDS_Y[1]},
-}
+
+# Define partial functions for each PDF
+g_s = partial(g_s_base, mu=mu, sigma=sigma, beta=beta, m=m, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
+h_s = partial(h_s_base, lam=lam, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
+g_b = partial(g_b_base, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
+h_b = partial(h_b_base, mu=mu_b, sigma=sigma_b, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
 
 
 # %%
 # ? 2D PDFS
-def signal_pdf(x: np.ndarray, y: np.ndarray, params: dict) -> np.ndarray:
+def signal_pdf(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Signal PDF."""
-    g_s_val = g_s(x, **params["g_s"])
-    h_s_val = h_s(y, **params["h_s"])
+    g_s_val = g_s(x)
+    h_s_val = h_s(y)
     return g_s_val * h_s_val
 
 
-def background_pdf(x: np.ndarray, y: np.ndarray, params: dict) -> np.ndarray:
+def background_pdf(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Background PDF."""
-    g_b_val = g_b(x, **params["g_b"])
-    h_b_val = h_b(y, **params["h_b"])
+    g_b_val = g_b(x)
+    h_b_val = h_b(y)
     return g_b_val * h_b_val
 
 
-def total_pdf(x: np.ndarray, y: np.ndarray, f: float, params: dict) -> np.ndarray:
+def total_pdf(x: np.ndarray, y: np.ndarray, f: float = 0.5) -> np.ndarray:
     """Total PDF."""
-    signal = signal_pdf(x, y, params)
-    background = background_pdf(x, y, params)
+    signal = signal_pdf(x, y)
+    background = background_pdf(x, y)
     return f * signal + (1 - f) * background
 
 
@@ -166,63 +159,62 @@ def total_pdf(x: np.ndarray, y: np.ndarray, f: float, params: dict) -> np.ndarra
 # ? Normalisation calculations and profiling
 
 
-g_s_int, _ = quad(
-    lambda x: g_s(np.array([x]), mu, sigma, beta, m, BOUNDS_X[0], BOUNDS_X[1]),
-    BOUNDS_X[0],
-    BOUNDS_X[1],
-)
+def integrate_function(
+    func: callable,
+    bounds_x: tuple,
+    bounds_y: tuple | None = None,
+) -> tuple[
+    float,
+    float,
+]:
+    """Generalized integration function.
 
-h_s_int, _ = quad(
-    lambda y: h_s(np.array([y]), lam, BOUNDS_Y[0], BOUNDS_Y[1])[0],
-    BOUNDS_Y[0],
-    BOUNDS_Y[1],
-)
+    Parameters:
+    - func: Callable. Function to integrate. For 2D, the function should accept y and x in that
+    order.
+    - bounds_x: tuple. Bounds for x, in the form (x_min, x_max).
+    - bounds_y: tuple or None. Bounds for y, in the form (y_min, y_max). If None, perform 1D
+    integration.
 
-g_b_int, _ = quad(
-    lambda x: g_b(np.array([x]), BOUNDS_X[0], BOUNDS_X[1])[0],
-    BOUNDS_X[0],
-    BOUNDS_X[1],
-)
-h_b_int, _ = quad(
-    lambda y: h_b(np.array([y]), mu, sigma, BOUNDS_Y[0], BOUNDS_Y[1])[0],
-    BOUNDS_Y[0],
-    BOUNDS_Y[1],
-)
+    Returns:
+    - result: float. Integration result.
+    - error: float. Estimated integration error.
+    """
+    if bounds_y is None:
+        # 1D integration
+        result, error = quad(lambda x: func(np.array([x]))[0], bounds_x[0], bounds_x[1])
+    else:
+        # 2D integration
+        result, error = dblquad(
+            lambda y, x: func(np.array([x]), np.array([y])),
+            bounds_x[0],
+            bounds_x[1],
+            lambda _: bounds_y[0],
+            lambda _: bounds_y[1],
+        )
+    return result, error
 
-signal_int, _ = dblquad(
-    lambda y, x: signal_pdf(np.array([x]), np.array([y]), params),
-    params["g_s"]["x_min"],
-    params["g_s"]["x_max"],
-    lambda _: params["h_s"]["y_min"],
-    lambda _: params["h_s"]["y_max"],
-)
 
-bkg_int, _ = dblquad(
-    lambda y, x: background_pdf(np.array([x]), np.array([y]), params),
-    params["g_b"]["x_min"],
-    params["g_b"]["x_max"],
-    lambda _: params["h_b"]["y_min"],
-    lambda _: params["h_b"]["y_max"],
-)
+# Example usage with the signal_pdf and background_pdf:
 
-total_int, _ = dblquad(
-    lambda y, x: total_pdf(np.array([x]), np.array([y]), f, params),
-    params["g_b"]["x_min"],
-    params["g_b"]["x_max"],
-    lambda _: params["h_b"]["y_min"],
-    lambda _: params["h_b"]["y_max"],
-)
+# Integrating g_s and h_s (1D PDFs)
+g_s_int, g_s_err = integrate_function(g_s, BOUNDS_X)
+h_s_int, h_s_err = integrate_function(h_s, BOUNDS_Y)
+
+# Integrating signal_pdf and background_pdf (2D PDFs)
+signal_int, signal_err = integrate_function(signal_pdf, BOUNDS_X, BOUNDS_Y)
+bkg_int, bkg_err = integrate_function(background_pdf, BOUNDS_X, BOUNDS_Y)
+
+# Integrating total_pdf (2D PDF)
+total_int, total_err = integrate_function(lambda x, y: total_pdf(x, y, f), BOUNDS_X, BOUNDS_Y)
 
 # Display results
-logger.info("Integration Results:")
-
-logger.info(f"g_s: {g_s_int}")
-logger.info(f"h_s: {h_s_int}")
-logger.info(f"g_b: {g_b_int}")
-logger.info(f"h_b: {h_b_int}")
-logger.info(f"h_s: {signal_int}")
-logger.info(f"g_b: {bkg_int}")
-logger.info(f"h_b: {total_int}")
+logger.info("Integration Results (Generalized):")
+logger.info(f"g_s: {g_s_int} ± {g_s_err}")
+logger.info(f"h_s: {h_s_int} ± {h_s_err}")
+logger.info(f"Signal: {signal_int} ± {signal_err}")
+logger.info(f"Background: {bkg_int} ± {bkg_err}")
+logger.info(f"Total: {total_int} ± {total_err}")
 
 
 # %%
@@ -265,7 +257,6 @@ axs[3].set_ylabel("Density")
 plt.tight_layout()
 plt.show()
 
-
 # %%
 # ? 1D Projections
 fig, axs = plt.subplots(1, 2, figsize=(14, 6))
@@ -276,8 +267,8 @@ x_data = np.linspace(BOUNDS_X[0], BOUNDS_X[1], 200)
 y_data = np.linspace(BOUNDS_Y[0], BOUNDS_Y[1], 200)
 
 # Calculate PDFs for X
-signal_x = g_s(x_data, **params["g_s"])
-background_x = g_b(x_data, **params["g_b"])
+signal_x = g_s(x_data)
+background_x = g_b(x_data)
 total_x = f * signal_x + (1 - f) * background_x
 
 # Plot X projections
@@ -290,8 +281,8 @@ axs[0].set_ylabel("Density")
 axs[0].legend()
 
 # Calculate PDFs for Y
-signal_y = h_s(y_data, **params["h_s"])
-background_y = h_b(y_data, **params["h_b"])
+signal_y = h_s(y_data)
+background_y = h_b(y_data)
 total_y = f * signal_y + (1 - f) * background_y
 
 # Plot Y projections
@@ -306,6 +297,7 @@ axs[1].legend()
 plt.tight_layout()
 plt.show()
 
+
 # %%
 # ? 2D Plot
 x_grid, y_grid = np.meshgrid(
@@ -318,7 +310,7 @@ x_flat = x_grid.ravel()
 y_flat = y_grid.ravel()
 
 # Compute the total PDF on the flattened grid
-joint_pdf_flat = total_pdf(x_flat, y_flat, f, params)
+joint_pdf_flat = total_pdf(x_flat, y_flat, f)
 
 # Reshape the result back into the grid shape
 joint_pdf = joint_pdf_flat.reshape(x_grid.shape)
@@ -345,34 +337,54 @@ plt.show()
 # ? Generation Timings
 
 
-def generate_sample_from_total_pdf(
+def total_pdf_sampler(
     n_events: int,
-    params: dict,
     f: float,
     rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Generate events from the total PDF."""
-    x = rng.uniform(low=BOUNDS_X[0], high=BOUNDS_X[1], size=n_events)
-    y = rng.uniform(low=BOUNDS_Y[0], high=BOUNDS_Y[1], size=n_events)
-    pdf_values = total_pdf(x=x, y=y, f=f, params=params)
-    max_pdf_value = np.max(pdf_values)
+    """Generate events from the total PDF using vectorized rejection sampling.
 
-    sampled_x = []
-    sampled_y = []
+    Parameters:
+        n_events (int): Number of events to generate.
+        f (float): Fraction parameter for the total PDF function.
+        rng (np.random.Generator): Random number generator.
 
-    for i in range(n_events):
-        x_rand = rng.uniform(low=BOUNDS_X[0], high=BOUNDS_X[1])
-        y_rand = rng.uniform(low=BOUNDS_Y[0], high=BOUNDS_Y[1])
-        p_rand = rng.uniform(low=0, high=max_pdf_value)
+    Returns:
+        tuple[np.ndarray, np.ndarray]: Arrays of x and y samples.
+    """
+    accepted_x = []
+    accepted_y = []
 
-        if p_rand <= total_pdf(x=np.array([x_rand]), y=np.array([y_rand]), f=f, params=params):
-            sampled_x.append(x_rand)
-            sampled_y.append(y_rand)
+    while len(accepted_x) < n_events:
+        # Generate a large pool of random samples
+        x_rand = rng.uniform(
+            low=BOUNDS_X[0],
+            high=BOUNDS_X[1],
+            size=10 * (n_events - len(accepted_x)),
+        )
+        y_rand = rng.uniform(
+            low=BOUNDS_Y[0],
+            high=BOUNDS_Y[1],
+            size=10 * (n_events - len(accepted_y)),
+        )
+        p_rand = rng.uniform(low=0, high=1, size=10 * (n_events - len(accepted_x)))
 
-    return np.array(sampled_x), np.array(sampled_y)
+        # Calculate PDF values for the current batch
+        pdf_values = total_pdf(x=x_rand, y=y_rand, f=f)
+        max_pdf_value = np.max(pdf_values)
+
+        # Apply rejection criterion
+        acceptance_mask = p_rand * max_pdf_value <= pdf_values
+
+        # Append accepted samples
+        accepted_x.extend(x_rand[acceptance_mask])
+        accepted_y.extend(y_rand[acceptance_mask])
+
+    # Convert lists to arrays and return exactly n_events samples
+    return np.array(accepted_x[:n_events]), np.array(accepted_y[:n_events])
 
 
-def total_pdf_wrapper(  # noqa: PLR0913
+def total_pdf_wrapper(
     xy: tuple[np.ndarray, np.ndarray],
     mu: float,
     sigma: float,
@@ -385,31 +397,28 @@ def total_pdf_wrapper(  # noqa: PLR0913
 ) -> tuple[float, np.ndarray]:
     """Wrapper for the total PDF."""
     x, y = xy
-    params = {
-        "g_s": {
-            "mu": mu,
-            "sigma": sigma,
-            "beta": beta,
-            "m": m,
-            "x_min": BOUNDS_X[0],
-            "x_max": BOUNDS_X[1],
-        },
-        "h_s": {"lam": lam, "y_min": BOUNDS_Y[0], "y_max": BOUNDS_Y[1]},
-        "g_b": {"x_min": BOUNDS_X[0], "x_max": BOUNDS_X[1]},
-        "h_b": {"mu": mu_b, "sigma": sigma_b, "y_min": BOUNDS_Y[0], "y_max": BOUNDS_Y[1]},
-    }
-    pdf_values = total_pdf(x=x, y=y, f=f, params=params)
+
+    # Update partials if parameters change during fitting
+    g_s = partial(
+        g_s_base,
+        mu=mu,
+        sigma=sigma,
+        beta=beta,
+        m=m,
+        x_min=BOUNDS_X[0],
+        x_max=BOUNDS_X[1],
+    )
+    h_s = partial(h_s_base, lam=lam, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
+    g_b = partial(g_b_base, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
+    h_b = partial(h_b_base, mu=mu_b, sigma=sigma_b, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
+
+    # Compute PDF values
+    pdf_values = f * (g_s(x) * h_s(y)) + (1 - f) * (g_b(x) * h_b(y))
     return len(x), pdf_values
 
 
-def perform_fit() -> None:
+def perform_fit(sampled_x: np.array, sampled_y: np.array) -> None:
     """Complete minuit fit."""
-    sampled_x, sampled_y = generate_sample_from_total_pdf(
-        n_events=n_events,
-        params=params,
-        f=f,
-        rng=rng,
-    )
     nll = ExtendedUnbinnedNLL((sampled_x, sampled_y), total_pdf_wrapper)
     minuit = Minuit(
         nll,
@@ -430,18 +439,21 @@ def perform_fit() -> None:
 
 rng = np.random.default_rng(seed=451)
 n_events = 100_000
+n_runs = 1
 
-n_runs = 100
 
+sampled_x, sampled_y = total_pdf_sampler(
+    n_events=n_events,
+    f=f,
+    rng=rng,
+)
 
+# Benchmark timings
 normal_time = timeit(lambda: rng.normal(size=n_events), number=n_runs) / n_runs
-
-
 sample_generation_time = (
     timeit(
-        lambda: generate_sample_from_total_pdf(
+        lambda: total_pdf_sampler(
             n_events=n_events,
-            params=params,
             f=f,
             rng=rng,
         ),
@@ -449,79 +461,80 @@ sample_generation_time = (
     )
     / n_runs
 )
+fit_time = (
+    timeit(
+        lambda: perform_fit(sampled_x=sampled_x, sampled_y=sampled_y),
+        number=n_runs,
+    )
+    / n_runs
+)
 
-
-fit_time = timeit(perform_fit, number=n_runs) / n_runs
-
-# Results
-relative_generation_time = sample_generation_time / normal_time
-relative_fit_time = fit_time / normal_time
-
+# Log benchmark results
 logger.info(f"Benchmark Results (averaged over {n_runs} runs):")
 logger.info(f"(i) np.random.normal: {normal_time:.6f} s")
 logger.info(
-    f"(ii) Sample generation: {sample_generation_time:.6f} s (relative: {relative_generation_time:.2f})",  # noqa: E501
+    f"(ii) Sample generation: {sample_generation_time:.6f} s (relative: {(sample_generation_time / normal_time):.2f})",  # noqa: E501
 )
-logger.info(f"(iii) Fit execution: {fit_time:.6f} s (relative: {relative_fit_time:.2f})")
+logger.info(f"(iii) Fit execution: {fit_time:.6f} s (relative: {(fit_time / normal_time):.2f})")
 # %%
-# ? Lam test
-true_params = {
-    "lam": 0.3,
-    "mu": 3,
-    "sigma": 0.3,
-    "beta": 1,
-    "m": 1.4,
-    "f": 0.6,
-    "mu_b": 0,
-    "sigma_b": 2.5,
-}
+# ? Parametric Bootstrapping
 
 sample_sizes = [500, 1000, 2500, 5000, 10000]
 n_bootstrap = 250
 
-# Store results
-results = {size: {"lambda_estimates": [], "sample_sizes": []} for size in sample_sizes}
-
-# Generate and fit function
-rng = np.random.default_rng(seed=42)
+lam_results = {size: {"values": [], "errors": []} for size in sample_sizes}
 
 
-def fit_data(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    """Fit the model to the data and return the estimate for lambda and its uncertainty."""
-
-    def pdf_wrapper(xy: tuple[np.ndarray, np.ndarray], lam: float) -> np.ndarray:
-        """Wrapper for the total PDF to evaluate it for given lambda."""
-        params = true_params.copy()
-        params["lam"] = lam
-        x, y = xy
-        return total_pdf(x, y, f=true_params["f"], params=params)
-
-    nll = ExtendedUnbinnedNLL((x, y), pdf_wrapper)
-    minuit = Minuit(nll, lam=true_params["lam"])
-    minuit.limits["lam"] = (0, None)
-    minuit.migrad()
-    return minuit.to_numpy()["lam"], minuit.errors["lam"]
+def nll(lam: float, y_data: np.ndarray) -> float:
+    """Calculate the negative log-likelihood for fitting lambda."""
+    pdf_y = h_s(y=y_data, lam=lam)
+    return -np.sum(np.log(pdf_y))
 
 
-for size in sample_sizes:
+for n_events in sample_sizes:
+    lambda_estimates = []
+    rng = np.random.default_rng(seed=451)
+
     for _ in range(n_bootstrap):
-        # Sample size with Poisson variation
-        actual_size = poisson.rvs(size, random_state=rng)
-        results[size]["sample_sizes"].append(actual_size)
+        sampled_x, sampled_y = total_pdf_sampler(
+            n_events=n_events,
+            f=f,
+            rng=rng,
+        )
 
-        # Generate data
-        x, y = generate_sample_from_total_pdf(actual_size, params, f, rng)
+        minuit = Minuit(
+            lambda lam: nll(lam=lam, y_data=sampled_y),  # noqa: B023
+            lam=lam,
+        )
+        minuit.limits["lam"] = (0, 10)
+        minuit.migrad()
+        if minuit.valid:
+            lam_results[n_events]["values"].append(minuit.values["lam"])  # noqa: PD011
+            lam_results[n_events]["errors"].append(minuit.errors["lam"])
 
-        # Fit data
-        lam_est, lam_err = fit_data(x, y)
-        results[size]["lambda_estimates"].append(lam_est)
 
-# Calculate bias and uncertainty
-bias = []
-uncertainty = []
+# Calculate bias and uncertainty from results dictionary
+bias_results = [np.mean(lam_results[size]["values"]) - lam for size in sample_sizes]
+uncertainty_results = [np.mean(lam_results[size]["errors"]) for size in sample_sizes]
 
-for size in sample_sizes:
-    lam_estimates = results[size]["lambda_estimates"]
-    bias.append(np.mean(lam_estimates) - true_params["lam"])
-    uncertainty.append(np.std(lam_estimates))
+# Plot results
+fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+
+# Bias plot
+axs[0].plot(sample_sizes, bias_results, marker="o")
+axs[0].set_title("Bias in λ vs Sample Size")
+axs[0].set_xlabel("Sample Size")
+axs[0].set_ylabel("Bias")
+axs[0].grid(visible=True)
+
+# Uncertainty plot
+axs[1].plot(sample_sizes, uncertainty_results, marker="o")
+axs[1].set_title("Uncertainty in λ vs Sample Size")
+axs[1].set_xlabel("Sample Size")
+axs[1].set_ylabel("Uncertainty")
+axs[1].grid(visible=True)
+
+plt.tight_layout()
+plt.show()
+
 # %%
