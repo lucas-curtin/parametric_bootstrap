@@ -14,6 +14,7 @@ from iminuit.cost import ExtendedUnbinnedNLL
 from loguru import logger
 from numba import njit
 from scipy.integrate import dblquad, quad
+from sweights import SWeight
 
 
 # %%
@@ -227,29 +228,25 @@ x_data = np.linspace(BOUNDS_X[0], BOUNDS_X[1], 200)
 y_data = np.linspace(BOUNDS_Y[0], BOUNDS_Y[1], 200)
 
 
-g_s_values = g_s(x_data, mu, sigma, beta, m, BOUNDS_X[0], BOUNDS_X[1])
-axs[0].plot(x_data, g_s_values)
+axs[0].plot(x_data, g_s(x_data))
 axs[0].set_title("Truncated Crystal Ball PDF (g_s)")
 axs[0].set_xlabel("X")
 axs[0].set_ylabel("Density")
 
 # Plot h_s (Truncated Exponential)
-h_s_values = h_s(y_data, lam, BOUNDS_Y[0], BOUNDS_Y[1])
-axs[1].plot(y_data, h_s_values)
+axs[1].plot(y_data, h_s(y_data))
 axs[1].set_title("Truncated Exponential PDF (h_s)")
 axs[1].set_xlabel("Y")
 axs[1].set_ylabel("Density")
 
 # Plot g_b (Uniform)
-g_b_values = g_b(x_data, BOUNDS_X[0], BOUNDS_X[1])
-axs[2].plot(x_data, g_b_values)
+axs[2].plot(x_data, g_b(x_data))
 axs[2].set_title("Uniform PDF (g_b)")
 axs[2].set_xlabel("X")
 axs[2].set_ylabel("Density")
 
 # Plot h_b (Truncated Normal)
-h_b_values = h_b(y_data, mu_b, sigma_b, BOUNDS_Y[0], BOUNDS_Y[1])
-axs[3].plot(y_data, h_b_values)
+axs[3].plot(y_data, h_b(y_data))
 axs[3].set_title("Truncated Normal PDF (h_b)")
 axs[3].set_xlabel("Y")
 axs[3].set_ylabel("Density")
@@ -493,20 +490,25 @@ def nll(lam: float, y_data: np.ndarray) -> float:
 
 for n_events in sample_sizes:
     lambda_estimates = []
-    rng = np.random.default_rng(seed=451)
+    rng = np.random.default_rng(seed=451)  # Use the RNG with a fixed seed for reproducibility
 
     for _ in range(n_bootstrap):
+        # Introduce Poisson variation to the sample size
+        actual_n_events = rng.poisson(n_events)
+
+        # Generate the sample using the varied sample size
         sampled_x, sampled_y = total_pdf_sampler(
-            n_events=n_events,
+            n_events=actual_n_events,  # Use Poisson-varied sample size
             f=f,
             rng=rng,
         )
 
+        # Perform the MLE fit for lambda
         minuit = Minuit(
             lambda lam: nll(lam=lam, y_data=sampled_y),  # noqa: B023
             lam=lam,
         )
-        minuit.limits["lam"] = (0, 10)
+
         minuit.migrad()
         if minuit.valid:
             lam_results[n_events]["values"].append(minuit.values["lam"])  # noqa: PD011
@@ -536,5 +538,93 @@ axs[1].grid(visible=True)
 
 plt.tight_layout()
 plt.show()
+
+
+# %%
+# ? Extended maximum likelihood fit in X and calculation of sWeights for Y
+
+
+def nll_x(mu: float, sigma: float, beta: float, m: float, f: float) -> float:
+    """Negative log-likelihood for fitting in X."""
+    signal_pdf = g_s_base(sampled_x, mu, sigma, beta, m, BOUNDS_X[0], BOUNDS_X[1])
+    background_pdf = g_b_base(sampled_x, BOUNDS_X[0], BOUNDS_X[1])
+    total_pdf_x = f * signal_pdf + (1 - f) * background_pdf
+    return -np.sum(np.log(total_pdf_x))
+
+
+sampled_x, sampled_y = total_pdf_sampler(
+    n_events=5000,  # Use Poisson-varied sample size
+    f=f,
+    rng=rng,
+)
+
+
+# Set up Minuit for the extended fit
+minuit_x = Minuit(
+    nll_x,
+    mu=mu,
+    sigma=sigma,
+    beta=beta,
+    m=m,
+    f=f,
+)
+minuit_x.limits["beta"] = (0, None)  # Ensure beta > 0
+minuit_x.limits["m"] = (1, None)  # Ensure m > 1
+minuit_x.limits["f"] = (0, 1)  # Signal fraction must be between 0 and 1
+minuit_x.migrad()
+minuit_x.hesse()
+
+# Extract fit parameters
+fit_params_x = minuit_x.values  # noqa: PD011
+fit_signal_fraction = fit_params_x["f"]
+fit_signal_count = fit_signal_fraction * len(sampled_x)
+fit_background_count = (1 - fit_signal_fraction) * len(sampled_x)
+
+
+# Create the sweighter using spdf and bpdf
+sweighter = SWeight(
+    data=sampled_x,  # Dataset (reshaped if necessary)
+    pdfs=[
+        lambda x: g_s_base(
+            np.atleast_1d(x),
+            fit_params_x["mu"],
+            fit_params_x["sigma"],
+            fit_params_x["beta"],
+            fit_params_x["m"],
+            BOUNDS_X[0],
+            BOUNDS_X[1],
+        ),
+        lambda x: g_b_base(np.atleast_1d(x), BOUNDS_X[0], BOUNDS_X[1]),
+    ],  # Signal and background PDFs
+    yields=[fit_signal_count, fit_background_count],  # Signal and background yields
+    discvarranges=[(BOUNDS_X[0], BOUNDS_X[1])],
+    method="summation",
+    compnames=["sig", "bkg"],
+    verbose=True,
+    checks=True,
+)
+
+# Retrieve signal weights
+signal_weights = sweighter.get_weight(0, sampled_x)
+
+
+# Perform a weighted fit in Y to extract lambda
+def nll_y_weighted(lam: float) -> float:
+    """Weighted negative log-likelihood for fitting in Y."""
+    pdf_y = h_s_base(sampled_y, lam, BOUNDS_Y[0], BOUNDS_Y[1])
+    weighted_log_likelihood = signal_weights * np.log(pdf_y)
+    return -np.sum(weighted_log_likelihood)
+
+
+# Set up Minuit for the weighted fit in Y
+minuit_y_weighted = Minuit(nll_y_weighted, lam=lam)
+minuit_y_weighted.limits["lam"] = (0, None)  # Decay constant lambda must be > 0
+minuit_y_weighted.migrad()
+minuit_y_weighted.hesse()
+
+# Extract the λ estimate and uncertainty
+lambda_weighted = minuit_y_weighted.values["lam"]  # noqa: PD011
+lambda_uncertainty = minuit_y_weighted.errors["lam"]
+
 
 # %%
