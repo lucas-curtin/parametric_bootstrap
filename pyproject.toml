@@ -18,6 +18,8 @@ dependencies = [
     "loguru",
     "iminuit",
     "numba_stats",
+    "sweights",
+    "numba",
 ]
 
 [tool.setuptools_scm]
