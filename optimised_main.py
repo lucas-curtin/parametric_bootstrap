@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from functools import partial
+from pathlib import Path
 from timeit import timeit
 
 import matplotlib.pyplot as plt
@@ -14,6 +15,8 @@ from iminuit.cost import ExtendedUnbinnedNLL
 from loguru import logger
 from scipy.integrate import dblquad, quad
 from sweights import SWeight
+
+image_dir = Path("/Users/lucascurtin/Desktop/latex_bank/S1/images")
 
 # %%
 # ? Parameters
@@ -131,7 +134,11 @@ logger.info(f"Total: {total_int} ± {total_err}")
 
 # %%
 # ? Core PDFs
-fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+fig, axs = plt.subplots(
+    2,
+    2,
+    figsize=(10, 6),
+)
 axs = axs.ravel()
 
 # Plot g_s (Truncated Crystal Ball)
@@ -163,11 +170,16 @@ axs[3].set_xlabel("Y")
 axs[3].set_ylabel("Density")
 
 plt.tight_layout()
+plt.savefig(image_dir / "indivdual_pdfs.png", dpi=300)
 plt.show()
 
 # %%
 # ? 1D Projections
-fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+fig, axs = plt.subplots(
+    1,
+    2,
+    figsize=(10, 6),
+)
 axs = axs.ravel()
 
 # Generate data for plotting
@@ -203,6 +215,7 @@ axs[1].set_ylabel("Density")
 axs[1].legend()
 
 plt.tight_layout()
+plt.savefig(image_dir / "combined_pdfs.png", dpi=300)
 plt.show()
 
 
@@ -224,7 +237,7 @@ joint_pdf_flat = total_pdf(x_flat, y_flat, f)
 joint_pdf = joint_pdf_flat.reshape(x_grid.shape)
 
 # Plot the joint PDF
-fig, ax = plt.subplots(figsize=(8, 6))
+fig, ax = plt.subplots(figsize=(10, 6))
 contour = ax.contourf(
     x_grid,
     y_grid,
@@ -239,10 +252,11 @@ ax.set_ylabel("Y")
 cbar.set_label("Density")
 
 plt.tight_layout()
+plt.savefig(image_dir / "joint_density.png", dpi=300)
 plt.show()
 
 # %%
-# ? Generation Timings
+# ? Generating Estimates
 
 
 def total_pdf_sampler(
@@ -343,11 +357,11 @@ def perform_fit(sampled_x: np.array, sampled_y: np.array) -> None:
     minuit.limits["m"] = (1, None)
     minuit.migrad()
     minuit.hesse()
+    return minuit
 
 
 rng = np.random.default_rng(seed=451)
 n_events = 100_000
-n_runs = 1
 
 
 sampled_x, sampled_y = total_pdf_sampler(
@@ -356,34 +370,145 @@ sampled_x, sampled_y = total_pdf_sampler(
     rng=rng,
 )
 
-# Benchmark timings
-normal_time = timeit(lambda: rng.normal(size=n_events), number=n_runs) / n_runs
-sample_generation_time = (
-    timeit(
-        lambda: total_pdf_sampler(
-            n_events=n_events,
-            f=f,
-            rng=rng,
-        ),
-        number=n_runs,
-    )
-    / n_runs
-)
-fit_time = (
-    timeit(
-        lambda: perform_fit(sampled_x=sampled_x, sampled_y=sampled_y),
-        number=n_runs,
-    )
-    / n_runs
+extended_minuit = perform_fit(sampled_x, sampled_y)
+
+
+# %%
+# ? Plotting results
+actual_values = {
+    "mu": mu,
+    "sigma": sigma,
+    "beta": beta,
+    "m": m,
+    "f": f,
+    "lam": lam,
+    "mu_b": mu_b,
+    "sigma_b": sigma_b,
+}
+
+# Extract parameter names, estimated values, and uncertainties from extended_minuit
+param_names = extended_minuit.parameters
+estimated_values = [extended_minuit.values[name] for name in param_names]  # noqa: PD011
+estimated_errors = [extended_minuit.errors[name] for name in param_names]
+
+# Match actual values order to the parameter names
+actual_values_ordered = [actual_values[name] for name in param_names]
+
+# X positions for the bars
+x_positions = np.arange(len(param_names))
+
+# Bar width
+bar_width = 0.4
+
+plt.figure(figsize=(10, 6))
+
+# Plot actual values
+plt.bar(
+    x_positions - bar_width / 2,
+    actual_values_ordered,
+    width=bar_width,
+    color="red",
+    alpha=0.7,
+    label="Actual Values",
 )
 
-# Log benchmark results
-logger.info(f"Benchmark Results (averaged over {n_runs} runs):")
-logger.info(f"(i) np.random.normal: {normal_time:.6f} s")
-logger.info(
-    f"(ii) Sample generation: {sample_generation_time:.6f} s (relative: {(sample_generation_time / normal_time):.2f})",  # noqa: E501
+# Plot estimated values with error bars
+plt.bar(
+    x_positions + bar_width / 2,
+    estimated_values,
+    yerr=estimated_errors,
+    width=bar_width,
+    color="blue",
+    alpha=0.7,
+    capsize=5,
+    label="Estimated Values",
 )
-logger.info(f"(iii) Fit execution: {fit_time:.6f} s (relative: {(fit_time / normal_time):.2f})")
+
+# Formatting
+plt.xticks(x_positions, param_names, rotation=45, ha="right", fontsize=12)
+plt.xlabel("Parameter Names", fontsize=14)
+plt.ylabel("Parameter Values", fontsize=14)
+plt.title("Comparison of Actual and Estimated Parameter Values", fontsize=16)
+plt.legend(fontsize=12)
+plt.grid(axis="y", linestyle="--", alpha=0.7)
+plt.tight_layout()
+
+plt.savefig(image_dir / "param_estimates.png", dpi=300)
+plt.show()
+
+# %%
+# ? Generation Timings
+
+n_runs = 100
+# Number of batches for uncertainty estimation
+n_batches = 10
+n_runs_per_batch = n_runs // n_batches
+
+# Timing results storage
+normal_times = []
+sample_generation_times = []
+fit_times = []
+
+# Benchmark each operation
+for _ in range(n_batches):
+    normal_times.append(
+        timeit(lambda: rng.normal(size=n_events), number=n_runs_per_batch) / n_runs_per_batch,
+    )
+    sample_generation_times.append(
+        timeit(
+            lambda: total_pdf_sampler(
+                n_events=n_events,
+                f=f,
+                rng=rng,
+            ),
+            number=n_runs_per_batch,
+        )
+        / n_runs_per_batch,
+    )
+    fit_times.append(
+        timeit(
+            lambda: perform_fit(sampled_x=sampled_x, sampled_y=sampled_y),
+            number=n_runs_per_batch,
+        )
+        / n_runs_per_batch,
+    )
+
+# Convert results to numpy arrays
+normal_times = np.array(normal_times)
+sample_generation_times = np.array(sample_generation_times)
+fit_times = np.array(fit_times)
+
+# Compute mean and standard deviation
+normal_time_mean = np.mean(normal_times)
+normal_time_std = np.std(normal_times, ddof=1)
+sample_generation_time_mean = np.mean(sample_generation_times)
+sample_generation_time_std = np.std(sample_generation_times, ddof=1)
+fit_time_mean = np.mean(fit_times)
+fit_time_std = np.std(fit_times, ddof=1)
+
+# Compute relative times and their uncertainties
+relative_sample_generation = sample_generation_time_mean / normal_time_mean
+relative_sample_generation_uncertainty = relative_sample_generation * np.sqrt(
+    (sample_generation_time_std / sample_generation_time_mean) ** 2
+    + (normal_time_std / normal_time_mean) ** 2,
+)
+
+relative_fit = fit_time_mean / normal_time_mean
+relative_fit_uncertainty = relative_fit * np.sqrt(
+    (fit_time_std / fit_time_mean) ** 2 + (normal_time_std / normal_time_mean) ** 2,
+)
+
+# Log benchmark results with uncertainties
+logger.info(f"Benchmark Results (averaged over {n_batches * n_runs_per_batch} runs):")
+logger.info(f"(i) np.random.normal: {normal_time_mean:.6f} ± {normal_time_std:.6f} s")
+logger.info(
+    f"(ii) Sample generation: {sample_generation_time_mean:.6f} ± {sample_generation_time_std:.6f} s "
+    f"(relative: {relative_sample_generation:.2f} ± {relative_sample_generation_uncertainty:.2f})",
+)
+logger.info(
+    f"(iii) Fit execution: {fit_time_mean:.6f} ± {fit_time_std:.6f} s "
+    f"(relative: {relative_fit:.2f} ± {relative_fit_uncertainty:.2f})",
+)
 # %%
 # ? Parametric Bootstrapping
 
@@ -431,7 +556,7 @@ bias = [np.mean(lam_results[size]["values"]) - lam for size in sample_sizes]
 uncertainty = [np.mean(lam_results[size]["errors"]) for size in sample_sizes]
 
 # Plot results
-fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+fig, axs = plt.subplots(1, 2, figsize=(10, 6))
 
 # Bias plot
 axs[0].plot(sample_sizes, bias, marker="o")
@@ -448,6 +573,7 @@ axs[1].set_ylabel("Uncertainty")
 axs[1].grid(visible=True)
 
 plt.tight_layout()
+plt.savefig(image_dir / "parametric_bootstrapping.png", dpi=300)
 plt.show()
 
 
@@ -546,7 +672,7 @@ weighted_uncertainty = [np.mean(weighted_lam_results[size]["errors"]) for size i
 
 # %%
 # Plot lambda results
-fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+fig, axs = plt.subplots(1, 2, figsize=(10, 6))
 
 # Bias plot
 axs[0].plot(sample_sizes, bias, marker="o", label="Unweighted")
@@ -567,6 +693,7 @@ axs[1].legend()
 axs[1].grid(visible=True)
 
 plt.tight_layout()
+plt.savefig(image_dir / "sweights.png", dpi=300)
 plt.show()
 
 # %%
