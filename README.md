@@ -1,26 +1,56 @@
 # Statistical Model
 
-This package provides tools to define, normalise, and test probability distributions commonly used in statistical studies, including signal and background models.
+This repository provides tools for defining, normalising, and testing probability density functions (PDFs) used in statistical analysis, with a focus on signal and background modelling. The package includes efficient methods for **data generation**, **parameter estimation**, and **bias/uncertainty studies**. It is designed to be computationally efficient, leveraging Python libraries such as `scipy`, `numpy`, and `iminuit`.
 
 ## Features
 
-- **Crystal Ball PDF**: Gaussian core with a power-law tail for modelling asymmetric distributions.
-- **Exponential Decay PDF**: Ideal for modelling decaying processes.
-- **Truncated PDFs**:
-  - **Truncated Crystal Ball**: Normalised over a defined range.
-  - **Truncated Exponential Decay**: Normalised over a defined range.
-  - **Truncated Gaussian**: A normal distribution confined to a specific range.
-  - **Uniform PDF**: Flat distribution over a specified range.
-- **Integration Utilities**: Tools for numerical integration to validate and check the normalisation of complex multidimensional PDFs.
-- **Composite Models**:
-  - **Signal PDFs**: Product of a Crystal Ball distribution and an exponential decay.
-  - **Background PDFs**: Combination of uniform and Gaussian distributions.
-  - **Total PDFs**: Weighted sum of signal and background models.
-- **Testing Framework**: Includes normalisation tests to ensure accuracy and correctness of the PDFs.
+### Core PDFs
+The package defines key PDFs for both signal and background distributions:
+- **Signal PDFs**:
+  - **Truncated Crystal Ball (`g_s`)**: Combines a Gaussian core with a power-law tail, designed for asymmetric distributions.
+  - **Truncated Exponential Decay (`h_s`)**: Exponential decay function normalised over a defined range.
+- **Background PDFs**:
+  - **Uniform Distribution (`g_b`)**: A flat distribution over a specified range.
+  - **Truncated Normal Distribution (`h_b`)**: A Gaussian distribution confined to a specific range.
+
+These functions are implemented with normalisation and truncation built-in, ensuring they integrate to unity over their specified domains.
+
+### Composite Models
+The **total probability density function (PDF)** combines signal and background contributions as a weighted sum:
+
+\[
+f(X, Y) = f \cdot g_s(X) \cdot h_s(Y) + (1 - f) \cdot g_b(X) \cdot h_b(Y)
+\]
+
+Where:
+- \(f\): Signal fraction.
+- \(g_s(X)\), \(h_s(Y)\): Signal PDFs for dimensions \(X\) and \(Y\).
+- \(g_b(X)\), \(h_b(Y)\): Background PDFs for dimensions \(X\) and \(Y\).
+
+## Tools and Capabilities
+
+### Normalisation Validation
+- All PDFs are normalised over their specified bounds.
+- Numerical integration ensures correctness.
+
+### Data Generation
+- **Vectorised Rejection Sampling**: Used to generate synthetic datasets from the total PDF. This method ensures efficient sampling of signal and background events while maintaining the desired PDF shape.
+
+### Parameter Estimation
+- **Extended Maximum Likelihood Fits**:
+  - Implemented using the `iminuit` library.
+  - Supports simultaneous fitting of all parameters, including shape and scale, with uncertainty propagation.
+- **Weighted Fits**:
+  - Incorporates sWeights to isolate signal contributions.
+
+### Bias and Uncertainty Studies
+- Includes parametric bootstrapping to assess bias and variability of fitted parameters across different sample sizes.
+
+### Visualisations
+- Visual representations of PDFs, projections, and parameter comparisons are included.
 
 ## Installation
-
-Install the package locally in editable mode:
+Install the package and its dependencies locally:
 
 ```bash
 pip install -e .
@@ -28,126 +58,75 @@ pip install -e .
 
 ## Usage
 
-### 1. Compute and Evaluate PDFs
-Use the `pdfs` module to define and evaluate distributions. For example, compute the value of a Crystal Ball PDF at a given point:
+### Define PDFs
+Define and evaluate distributions using the `pdfs` module. For example, compute the value of a truncated Crystal Ball PDF:
 
 ```python
-from statistical_model.pdfs import crystal_ball
+from statistical_models.pdfs import g_s_base
 
+x = 2.5
 mu = 3
 sigma = 0.3
 beta = 1
 m = 1.4
-x = 2.5
+x_min = 0
+x_max = 5
 
-pdf_value = crystal_ball(x, mu, sigma, beta, m)
-print(f"Crystal Ball PDF value: {pdf_value}")
+pdf_value = g_s_base(x, mu, sigma, beta, m, x_min, x_max)
+print(f"PDF value: {pdf_value}")
 ```
 
-### 2. Validate Normalisation
-Use the `integrator` module to check the normalisation of signal, background, and total PDFs:
+### Generate Synthetic Data
+Generate datasets using the vectorised rejection sampler:
 
 ```python
-from statistical_model.integrator import check_normalisation
+from optimised_main import total_pdf_sampler
+import numpy as np
 
-params = {
-    "mu": 3,
-    "sigma": 0.3,
-    "beta": 1,
-    "m": 1.4,
-    "f": 0.6,
-    "lambda": 0.3,
-    "mu_b": 0,
-    "sigma_b": 2.5,
-}
-
-signal_norm, background_norm, total_norm = check_normalisation(params)
-
-print(f"Signal Normalisation: {signal_norm}")
-print(f"Background Normalisation: {background_norm}")
-print(f"Total Normalisation: {total_norm}")
+rng = np.random.default_rng(seed=451)
+n_events = 1000
+sampled_x, sampled_y = total_pdf_sampler(
+    n_events=n_events,
+    f=0.6,
+    rng=rng,
+    mu=3,
+    sigma=0.3,
+    beta=1,
+    m=1.4,
+    lam=0.3,
+    mu_b=0,
+    sigma_b=2.5,
+    bounds_x=[0, 5],
+    bounds_y=[0, 10],
+)
 ```
 
-### 3. Running Tests
-The package includes unit tests to verify the accuracy of the PDFs and their normalisation. Run the tests using `pytest`:
-
-```bash
-pytest -s tests/
-```
-
-### Example Test Script
-
-Here's a sample test to validate the normalisation:
+### Perform Parameter Estimation
+Perform parameter estimation using extended maximum likelihood fits:
 
 ```python
-from statistical_model.integrator import check_normalisation
+from optimised_main import perform_fit
 
-def test_normalisation():
-    params = {
-        "mu": 3,
-        "sigma": 0.3,
-        "beta": 1,
-        "m": 1.4,
-        "f": 0.6,
-        "lambda": 0.3,
-        "mu_b": 0,
-        "sigma_b": 2.5,
-    }
-    
-    signal_norm, background_norm, total_norm = check_normalisation(params)
-    
-    if not abs(signal_norm - 1.0) < 1e-6:
-        raise ValueError(f"Signal PDF is not properly normalised: {signal_norm}")
-    
-    if not abs(background_norm - 1.0) < 1e-6:
-        raise ValueError(f"Background PDF is not properly normalised: {background_norm}")
-    
-    if not abs(total_norm - 1.0) < 1e-6:
-        raise ValueError(f"Total PDF is not properly normalised: {total_norm}")
+fit_results = perform_fit(
+    sampled_x=sampled_x,
+    sampled_y=sampled_y,
+    mu=3,
+    sigma=0.3,
+    beta=1,
+    m=1.4,
+    f=0.6,
+    lam=0.3,
+    mu_b=0,
+    sigma_b=2.5,
+    n_events=n_events,
+)
+
+print(f"Fitted parameters: {fit_results.values}")
+print(f"Uncertainties: {fit_results.errors}")
 ```
 
-### 4. Extending the Package
-The package is designed to be extensible. You can add more custom PDFs or composite models by defining new functions in the `pdfs` module and using the utilities in `integrator` for validation.
+### Visualise Results
+Generate plots of PDFs and fitted parameters using the built-in visualisation tools.
 
----
-
-## Project Structure
-
-```
-statistical_model/
-├── statistical_model/
-│   ├── __init__.py
-│   ├── pdfs.py          # Defines PDFs like Crystal Ball, Exponential, etc.
-│   ├── integrator.py    # Utilities for integration and normalisation checks.
-│   ├── utils.py         # Additional helpers (if needed).
-├── tests/
-│   ├── __init__.py
-│   ├── test_pdfs.py     # Unit tests for PDFs.
-│   ├── test_integrator.py # Unit tests for integration and normalisation.
-├── pyproject.toml       # Build configuration.
-├── README.md            # Documentation.
-```
-
-## Dependencies
-
-The package uses the following Python libraries:
-- `scipy`: For numerical integration and statistical distributions.
-- `numpy`: For efficient numerical computations.
-
-Install dependencies using `pip`:
-
-```bash
-pip install scipy numpy
-```
-
----
-
-## Contributing
-
-Contributions are welcome! Feel free to submit issues or pull requests to improve the functionality or extend the features of the package.
-
----
-
-## License
-
-This package is licensed under the MIT License. See the `LICENSE` file for details.
+## AI Declaration
+This project was developed with assistance from OpenAI's ChatGPT, which was used for drafting, optimising code structures, and generating this README. All implementation, validation, and final edits were performed by the author.
