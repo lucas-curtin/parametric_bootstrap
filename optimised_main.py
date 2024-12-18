@@ -14,6 +14,7 @@ from iminuit import Minuit
 from iminuit.cost import ExtendedUnbinnedNLL
 from loguru import logger
 from scipy.integrate import dblquad, quad
+from sweights import SWeight
 
 image_dir = Path("/Users/lucascurtin/Desktop/latex_bank/S1/images")
 
@@ -397,27 +398,23 @@ def perform_fit(  # noqa: PLR0913
     mu_b: float,
     sigma_b: float,
     n_events: int,
-    rng: np.random.Generator,
 ) -> Minuit:
     """Complete minuit fit using extended unbinned likelihood."""
     # Define the NLL using the provided total_density function
     nll = ExtendedUnbinnedNLL((sampled_x, sampled_y), total_density)
 
-    # Noise factor for parameter initialization
-    noise_factor = 0.2
-
     # Initialize Minuit with parameters perturbed by noise
     minuit = Minuit(
         nll,
-        mu=mu * (1 + rng.normal(0, noise_factor)),
-        sigma=sigma * (1 + rng.normal(0, noise_factor)),
+        mu=mu,
+        sigma=sigma,
         beta=beta,
         m=m,
-        f=f * (1 + rng.normal(0, noise_factor)),
-        lam=lam * (1 + rng.normal(0, noise_factor)),
-        mu_b=mu_b * (1 + rng.normal(0, noise_factor)),
-        sigma_b=sigma_b * (1 + rng.normal(0, noise_factor)),
-        n_events=n_events * (1 + rng.normal(0, noise_factor)),
+        f=f,
+        lam=lam,
+        mu_b=mu_b,
+        sigma_b=sigma_b,
+        n_events=n_events,
     )
 
     # Set parameter limits
@@ -463,7 +460,6 @@ extended_minuit = perform_fit(
     mu_b=tp["mu_b"],
     sigma_b=tp["sigma_b"],
     n_events=tp["n_events"],
-    rng=rng,
 )
 
 
@@ -613,7 +609,7 @@ relative_fit_uncertainty = relative_fit * np.sqrt(
 logger.info(f"Benchmark Results (averaged over {n_batches * n_runs_per_batch} runs):")
 logger.info(f"(i) np.random.normal: {normal_time_mean:.6f} ± {normal_time_std:.6f} s")
 logger.info(
-    f"(ii) Sample generation: {sample_generation_time_mean:.6f} ± {sample_generation_time_std:.6f} s "
+    f"(ii) Sample generation: {sample_generation_time_mean:.6f} ± {sample_generation_time_std:.6f}s"
     f"(relative: {relative_sample_generation:.2f} ± {relative_sample_generation_uncertainty:.2f})",
 )
 logger.info(
@@ -626,10 +622,40 @@ logger.info(
 # ? Parametric Bootstrapping
 rng = np.random.default_rng(seed=451)
 
-sample_sizes = [500]
+sample_sizes = [500, 1000, 2500, 5000, 10000]
 n_toys = 250
 
 results = {}
+
+
+def total_pdf_x(  # noqa: PLR0913
+    x: np.ndarray,
+    mu: float,
+    sigma: float,
+    beta: float,
+    m: float,
+    f: float,
+    n_events: float,  # Total number of events (expected number of events)
+) -> tuple[float, np.ndarray]:
+    """Wrapper for the total PDF with N_total, returning both the integral and density."""
+    # Precompute the individual PDFs
+    signal_pdf = pdf.g_s_base(
+        x,
+        mu=mu,
+        sigma=sigma,
+        beta=beta,
+        m=m,
+        x_min=tp["bounds_x"][0],
+        x_max=tp["bounds_x"][1],
+    )
+    background_pdf = pdf.g_b_base(x, x_min=tp["bounds_x"][0], x_max=tp["bounds_x"][1])
+
+    # Total PDF
+    pdf_values = f * signal_pdf + (1 - f) * background_pdf
+
+    # Return integral (n_events) and scaled density
+    return n_events, n_events * pdf_values
+
 
 for sample_size in sample_sizes:
     n_events = rng.poisson(sample_size)
@@ -659,7 +685,7 @@ for sample_size in sample_sizes:
         lam=tp["lam"],
         mu_b=tp["mu_b"],
         sigma_b=tp["sigma_b"],
-        n_events=n_events,
+        n_events=sample_size,
     )
 
     mi.limits["beta"] = (0, None)
@@ -672,7 +698,7 @@ for sample_size in sample_sizes:
 
     toys = [
         total_pdf_sampler(
-            n_events=int(fit_params["n_events"]),
+            n_events=n_poisson,
             f=fit_params["f"],
             rng=rng,
             mu=fit_params["mu"],
@@ -683,32 +709,19 @@ for sample_size in sample_sizes:
             mu_b=fit_params["mu_b"],
             sigma_b=fit_params["sigma_b"],
         )
-        for _ in range(n_toys)
+        for n_poisson in rng.poisson(int(fit_params["n_events"]), n_toys)
     ]
 
     results[sample_size] = {
-        "values": {param: [] for param in mi.parameters},
-        "errors": {param: [] for param in mi.parameters},
+        "values": [],
+        "errors": [],
+        "lambda_weighted": None,
+        "lambda_uncertainty": None,
     }
 
     # Fit each toy sample, with a minimiser the same as the one to make the original data.
     for toy in toys:
         nll_t = ExtendedUnbinnedNLL((toy[0], toy[1]), total_density)
-        pdf.g_s_base(
-            toy[0],
-            mu=tp["mu"],
-            sigma=tp["sigma"],
-            beta=tp["beta"],
-            m=tp["m"],
-            x_min=tp["bounds_x"][0],
-            x_max=tp["bounds_x"][1],
-        )
-        pdf.h_s_base(
-            toy[0],
-            lam=tp["lam"],
-            y_min=tp["bounds_y"][0],
-            y_max=tp["bounds_y"][1],
-        )
         mi_t = Minuit(
             nll_t,
             mu=tp["mu"],
@@ -722,16 +735,239 @@ for sample_size in sample_sizes:
             n_events=n_events,
         )
 
-        mi_t.limits["beta"] = (0, None)  # Beta must be positive
-        mi_t.limits["m"] = (1, None)
-        mi_t.limits["sigma"] = (0.1, 1)
+        mi_t.limits["beta"] = (0.01, None)  # Beta must be positive
+        mi_t.limits["m"] = (1.01, None)
+        mi_t.limits["sigma"] = (0.01, None)
+        mi_t.limits["sigma_b"] = (0.01, None)
 
         mi_t.migrad()
         mi_t.hesse()
 
         # Store values and errors in the results dictionary
-        for param in mi_t.parameters:
-            results[sample_size]["values"][param].append(mi_t.values[param])  # noqa: PD011
-            results[sample_size]["errors"][param].append(mi_t.errors[param])
+        results[sample_size]["values"].append(mi_t.values["lam"])  # noqa: PD011
+        results[sample_size]["errors"].append(mi_t.errors["lam"])
+
+    # Perform the lambda calculation using s-weights
+    minuit_x = Minuit(
+        ExtendedUnbinnedNLL(
+            sample_x,
+            total_pdf_x,
+        ),
+        mu=tp["mu"],
+        sigma=tp["sigma"],
+        beta=tp["beta"],
+        m=tp["m"],
+        f=tp["f"],
+        n_events=len(sample_x),
+    )
+
+    minuit_x.limits["beta"] = (0, None)  # Ensure beta > 0
+    minuit_x.limits["m"] = (1, None)  # Ensure m > 1
+    minuit_x.limits["f"] = (0, 1)  # Signal fraction must be between 0 and 1
+    minuit_x.migrad()
+    minuit_x.hesse()
+
+    fit_params_x = minuit_x.values  # noqa: PD011
+    fit_signal_fraction = fit_params_x["f"]
+    fit_signal_count = fit_signal_fraction * len(sample_x)
+    fit_background_count = (1 - fit_signal_fraction) * len(sample_x)
+
+    # Define signal and background PDFs based on fit parameters
+    signal_pdf = lambda x: pdf.g_s_base(  # noqa: E731
+        np.atleast_1d(x),
+        fit_params_x["mu"],  # noqa: B023
+        fit_params_x["sigma"],  # noqa: B023
+        fit_params_x["beta"],  # noqa: B023
+        fit_params_x["m"],  # noqa: B023
+        tp["bounds_x"][0],
+        tp["bounds_x"][1],
+    )
+    background_pdf = lambda x: pdf.g_b_base(  # noqa: E731
+        np.atleast_1d(x),
+        tp["bounds_x"][0],
+        tp["bounds_x"][1],
+    )
+
+    # Create the sWeight object
+    sweighter = SWeight(
+        data=sample_x,  # Dataset
+        pdfs=[signal_pdf, background_pdf],  # Signal and background PDFs
+        yields=[fit_signal_count, fit_background_count],  # Signal and background yields
+        discvarranges=[(tp["bounds_x"][0], tp["bounds_x"][1])],
+        method="summation",
+        compnames=["sig", "bkg"],
+        verbose=True,
+        checks=True,
+    )
+
+    signal_weights = sweighter.get_weight(0, sample_x)
+
+    def nll_y_weighted(lam: float) -> float:
+        """Weighted negative log likelihood."""
+        pdf_y = pdf.h_s_base(sample_y, lam, tp["bounds_y"][0], tp["bounds_y"][1])  # noqa: B023
+        weighted_log_likelihood = signal_weights * np.log(pdf_y)  # noqa: B023
+        return -np.sum(weighted_log_likelihood)
+
+    minuit_y_weighted = Minuit(nll_y_weighted, lam=1.0)
+    minuit_y_weighted.limits["lam"] = (0, None)
+    minuit_y_weighted.migrad()
+    minuit_y_weighted.hesse()
+
+    results[sample_size]["lambda_weighted"] = minuit_y_weighted.values["lam"]  # noqa: PD011
+    results[sample_size]["lambda_uncertainty"] = minuit_y_weighted.errors["lam"]
+
+
+# %%
+# ? Plotting
+true_lambda = mi.values["lam"]  # True lambda value from the fit  # noqa: PD011
+sample_sizes = list(results.keys())
+n_rows = len(sample_sizes)
+
+# Create subplots
+fig, axs = plt.subplots(n_rows, 3, figsize=(15, 5 * n_rows))
+fig.subplots_adjust(hspace=0.4, wspace=0.3)
+
+for i, sample_size in enumerate(sample_sizes):
+    values = np.array(results[sample_size]["values"])
+    errors = np.array(results[sample_size]["errors"])
+    lambda_weighted = results[sample_size]["lambda_weighted"]
+    lambda_uncertainty = results[sample_size]["lambda_uncertainty"]
+
+    # Filter out NaN uncertainties and their corresponding values
+    valid_mask = ~np.isnan(errors)
+    values = values[valid_mask]
+    errors = errors[valid_mask]
+
+    # Compute derived quantities
+    biases = values - true_lambda
+    uncertainties = errors
+
+    # Compute statistics and their uncertainties
+    def compute_stats_with_uncertainty(xvals: np.array) -> tuple:
+        """Calc uncertainties."""
+        mean = np.mean(xvals)
+        std = np.std(xvals, ddof=1)
+        mean_error = std / np.sqrt(len(xvals))
+        std_error = std / np.sqrt(2 * len(xvals) - 1)
+        return mean, std, mean_error, std_error
+
+    mean_values, std_values, me_values, se_values = compute_stats_with_uncertainty(values)
+    mean_bias, std_bias, me_bias, se_bias = compute_stats_with_uncertainty(biases)
+    mean_uncertainties, std_uncertainties, me_uncertainties, se_uncertainties = (
+        compute_stats_with_uncertainty(uncertainties)
+    )
+
+    # Format values to significant figures
+    def format_with_uncertainty(value: float, uncertainty: float) -> str:
+        """Format our values."""
+        return f"{value:.2g} ± {uncertainty:.1g}"
+
+    # Column 1: Distribution of fitted values
+    hist_values, bin_edges = np.histogram(values, bins="auto", density=True)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    bin_widths = np.diff(bin_edges)
+    errors_hist = np.sqrt(hist_values / len(values))  # Error bars for histogram
+
+    axs[i, 0].bar(
+        bin_centers,
+        hist_values,
+        width=bin_widths,
+        alpha=0.6,
+    )
+    axs[i, 0].errorbar(bin_centers, hist_values, yerr=errors_hist, fmt="o")
+    axs[i, 0].axvline(true_lambda, color="red", linestyle="--", label=r"True $\lambda$")
+    axs[i, 0].axvline(
+        mean_values,
+        color="blue",
+        linestyle="--",
+        label=rf"$\mu = {format_with_uncertainty(mean_values, me_values)}$",
+    )
+    axs[i, 0].axvline(
+        lambda_weighted,
+        color="green",
+        linestyle="-.",
+        label=rf"Weighted $\lambda = {lambda_weighted:.2g}$",
+    )
+    axs[i, 0].set_ylabel("Density")
+    axs[i, 0].set_title(
+        f"Fitted λ (Sample Size {sample_size})\n"
+        f"σ = {format_with_uncertainty(std_values, se_values)}",  # noqa: RUF001
+    )
+    axs[i, 0].legend()
+    axs[i, 0].set_xlabel("Fitted λ")
+
+    # Column 2: Distribution of bias
+    hist_bias, bin_edges_bias = np.histogram(biases, bins="auto", density=True)
+    bin_centers_bias = 0.5 * (bin_edges_bias[:-1] + bin_edges_bias[1:])
+    bin_widths_bias = np.diff(bin_edges_bias)
+    errors_bias_hist = np.sqrt(hist_bias / len(biases))  # Error bars for histogram
+
+    axs[i, 1].bar(
+        bin_centers_bias,
+        hist_bias,
+        width=bin_widths_bias,
+        alpha=0.6,
+    )
+    axs[i, 1].errorbar(bin_centers_bias, hist_bias, yerr=errors_bias_hist, fmt="o")
+    axs[i, 1].axvline(0, color="red", linestyle="--", label="Zero Bias")
+    axs[i, 1].axvline(
+        mean_bias,
+        color="blue",
+        linestyle="--",
+        label=rf"$\mu = {format_with_uncertainty(mean_bias, me_bias)}$",
+    )
+    axs[i, 1].axvline(
+        lambda_weighted - true_lambda,
+        color="green",
+        linestyle="-.",
+        label=rf"Weighted Bias = {lambda_weighted - true_lambda:.2g}$",
+    )
+    axs[i, 1].set_ylabel("Density")
+    axs[i, 1].set_title(
+        f"Bias (Sample Size {sample_size})\nσ = {format_with_uncertainty(std_bias, se_bias)}",  # noqa: RUF001
+    )
+    axs[i, 1].legend()
+    axs[i, 1].set_xlabel("Bias")
+
+    # Column 3: Distribution of uncertainties
+    hist_unc, bin_edges_unc = np.histogram(uncertainties, bins="auto", density=True)
+    bin_centers_unc = 0.5 * (bin_edges_unc[:-1] + bin_edges_unc[1:])
+    bin_widths_unc = np.diff(bin_edges_unc)
+    errors_unc_hist = np.sqrt(hist_unc / len(uncertainties))  # Error bars for histogram
+
+    axs[i, 2].bar(
+        bin_centers_unc,
+        hist_unc,
+        width=bin_widths_unc,
+        alpha=0.6,
+    )
+    axs[i, 2].errorbar(bin_centers_unc, hist_unc, yerr=errors_unc_hist, fmt="o")
+    axs[i, 2].axvline(mi.errors["lam"], color="red", linestyle="--", label=r"True Uncertainty")
+    axs[i, 2].axvline(
+        mean_uncertainties,
+        color="blue",
+        linestyle="--",
+        label=rf"$\mu = {format_with_uncertainty(mean_uncertainties, me_uncertainties)}$",
+    )
+    axs[i, 2].axvline(
+        lambda_uncertainty,
+        color="green",
+        linestyle="-.",
+        label=rf"Weighted Uncertainty = {lambda_uncertainty:.2g}$",
+    )
+    axs[i, 2].set_ylabel("Density")
+    axs[i, 2].set_title(
+        f"Uncertainty (Sample Size {sample_size})\n"
+        f"σ = {format_with_uncertainty(std_uncertainties, se_uncertainties)}",  # noqa: RUF001
+    )
+    axs[i, 2].legend()
+    axs[i, 2].set_xlabel("Uncertainty")
+
+    uncertainties_lims = np.append(uncertainties, [mi.errors["lam"], lambda_uncertainty])
+    axs[i, 2].set_xlim([min(uncertainties_lims) * 0.95, max(uncertainties_lims) * 1.05])
+
+plt.tight_layout()
+plt.show()
+
 
 # %%
