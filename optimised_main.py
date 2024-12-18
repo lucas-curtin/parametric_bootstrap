@@ -967,6 +967,7 @@ for i, sample_size in enumerate(sample_sizes):
     axs[i, 2].set_xlim([min(uncertainties_lims) * 0.95, max(uncertainties_lims) * 1.05])
 
 plt.tight_layout()
+plt.savefig(image_dir / "lambda_estimation.png", dpi=300)
 plt.show()
 
 
