@@ -122,4 +122,4 @@ jupytext --to notebook your_file.py
 ```
 
 ## AI Declaration
-This project was developed with assistance from OpenAI's ChatGPT, which was used for drafting, optimising code structures, and generating this README. All implementation, validation, and final edits were performed by the author.
+This project was developed with assistance from OpenAI's ChatGPT, which was used for drafting, optimising code structures, and generating this README. All implementation, validation, and final edits were performed by the author. ChatGPT was used extensively for writing up handwritten notes into Latex, as well as helping gather resources to learn more about certain topics such as sWeights. Furthermore, it was used to help teach how to implement numba-jit. Lastly, it was used to help with the documentation of functions and making sleek plots to best show the information from the analysis completed in this project. 
