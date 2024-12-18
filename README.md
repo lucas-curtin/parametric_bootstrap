@@ -18,6 +18,7 @@ These functions are implemented with normalisation and truncation built-in, ensu
 ### Composite Models
 The **total probability density function (PDF)** combines signal and background contributions as a weighted sum:
 
+```latex
 \[
 f(X, Y) = f \cdot g_s(X) \cdot h_s(Y) + (1 - f) \cdot g_b(X) \cdot h_b(Y)
 \]
@@ -26,7 +27,7 @@ Where:
 - \(f\): Signal fraction.
 - \(g_s(X)\), \(h_s(Y)\): Signal PDFs for dimensions \(X\) and \(Y\).
 - \(g_b(X)\), \(h_b(Y)\): Background PDFs for dimensions \(X\) and \(Y\).
-
+```
 ## Tools and Capabilities
 
 ### Normalisation Validation
@@ -125,8 +126,13 @@ print(f"Fitted parameters: {fit_results.values}")
 print(f"Uncertainties: {fit_results.errors}")
 ```
 
-### Visualise Results
-Generate plots of PDFs and fitted parameters using the built-in visualisation tools.
+### Running main.py
+
+There are .py scripts with the #%% ipython terminals used. This is largely to help ensure clean code is written with good formatting and linting. These have then been converted into notebooks using the **jupytext** module instead with the **dev** dependencies. This can be utilised as follows:
+
+```bash
+jupytext --to notebook your_file.py
+```
 
 ## AI Declaration
 This project was developed with assistance from OpenAI's ChatGPT, which was used for drafting, optimising code structures, and generating this README. All implementation, validation, and final edits were performed by the author.
