@@ -13,13 +13,13 @@ dependencies = [
     "scipy",
     "numpy",
     "matplotlib",
-    "ruff",
     "pytest",
     "loguru",
     "iminuit",
     "numba_stats",
     "sweights",
     "numba",
+    "ipykernel",
 ]
 
 [tool.setuptools_scm]

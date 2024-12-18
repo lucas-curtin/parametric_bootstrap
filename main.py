@@ -474,9 +474,9 @@ actual_values_scaled = [
 ]
 
 estimated_values_scaled = [
-    extended_minuit.values[name] / tp["n_events"]  # noqa: PD011
+    extended_minuit.values[name] / tp["n_events"]
     if name == "n_events"
-    else extended_minuit.values[name]  # noqa: PD011
+    else extended_minuit.values[name]
     for name in param_names
 ]
 
@@ -559,14 +559,23 @@ fit_times = []
 # Benchmark each operation
 for _ in range(n_batches):
     normal_times.append(
-        timeit(lambda: rng.normal(size=n_events), number=n_runs_per_batch) / n_runs_per_batch,
+        timeit(lambda: rng.normal(size=tp["n_events"]), number=n_runs_per_batch) / n_runs_per_batch,
     )
     sample_generation_times.append(
         timeit(
             lambda: total_pdf_sampler(
-                n_events=n_events,
+                n_events=tp["n_events"],
                 f=tp["f"],
                 rng=rng,
+                mu=tp["mu"],
+                sigma=tp["sigma"],
+                beta=tp["beta"],
+                m=tp["m"],
+                lam=tp["lam"],
+                mu_b=tp["mu_b"],
+                sigma_b=tp["sigma_b"],
+                bounds_x=tp["bounds_x"],
+                bounds_y=tp["bounds_y"],
             ),
             number=n_runs_per_batch,
         )
@@ -574,7 +583,19 @@ for _ in range(n_batches):
     )
     fit_times.append(
         timeit(
-            lambda: perform_fit(sampled_x=sampled_x, sampled_y=sampled_y),
+            lambda: perform_fit(
+                sampled_x=sampled_x,
+                sampled_y=sampled_y,
+                mu=tp["mu"],
+                sigma=tp["sigma"],
+                beta=tp["beta"],
+                m=tp["m"],
+                f=tp["f"],
+                lam=tp["lam"],
+                mu_b=tp["mu_b"],
+                sigma_b=tp["sigma_b"],
+                n_events=tp["n_events"],
+            ),
             number=n_runs_per_batch,
         )
         / n_runs_per_batch,
@@ -694,7 +715,7 @@ for sample_size in sample_sizes:
     mi.migrad()
     mi.hesse()
 
-    fit_params = {key: mi.values[key] for key in mi.parameters}  # noqa: PD011
+    fit_params = {key: mi.values[key] for key in mi.parameters}
 
     toys = [
         total_pdf_sampler(
@@ -744,7 +765,7 @@ for sample_size in sample_sizes:
         mi_t.hesse()
 
         # Store values and errors in the results dictionary
-        results[sample_size]["values"].append(mi_t.values["lam"])  # noqa: PD011
+        results[sample_size]["values"].append(mi_t.values["lam"])
         results[sample_size]["errors"].append(mi_t.errors["lam"])
 
     # Perform the lambda calculation using s-weights
@@ -767,7 +788,7 @@ for sample_size in sample_sizes:
     minuit_x.migrad()
     minuit_x.hesse()
 
-    fit_params_x = minuit_x.values  # noqa: PD011
+    fit_params_x = minuit_x.values
     fit_signal_fraction = fit_params_x["f"]
     fit_signal_count = fit_signal_fraction * len(sample_x)
     fit_background_count = (1 - fit_signal_fraction) * len(sample_x)
@@ -813,13 +834,13 @@ for sample_size in sample_sizes:
     minuit_y_weighted.migrad()
     minuit_y_weighted.hesse()
 
-    results[sample_size]["lambda_weighted"] = minuit_y_weighted.values["lam"]  # noqa: PD011
+    results[sample_size]["lambda_weighted"] = minuit_y_weighted.values["lam"]
     results[sample_size]["lambda_uncertainty"] = minuit_y_weighted.errors["lam"]
 
 
 # %%
 # ? Plotting
-true_lambda = mi.values["lam"]  # True lambda value from the fit  # noqa: PD011
+true_lambda = mi.values["lam"]  # True lambda value from the fit
 sample_sizes = list(results.keys())
 n_rows = len(sample_sizes)
 
