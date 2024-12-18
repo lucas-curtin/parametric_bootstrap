@@ -15,19 +15,6 @@ The package defines key PDFs for both signal and background distributions:
 
 These functions are implemented with normalisation and truncation built-in, ensuring they integrate to unity over their specified domains.
 
-### Composite Models
-The **total probability density function (PDF)** combines signal and background contributions as a weighted sum:
-
-```latex
-\[
-f(X, Y) = f \cdot g_s(X) \cdot h_s(Y) + (1 - f) \cdot g_b(X) \cdot h_b(Y)
-\]
-
-Where:
-- \(f\): Signal fraction.
-- \(g_s(X)\), \(h_s(Y)\): Signal PDFs for dimensions \(X\) and \(Y\).
-- \(g_b(X)\), \(h_b(Y)\): Background PDFs for dimensions \(X\) and \(Y\).
-```
 ## Tools and Capabilities
 
 ### Normalisation Validation
