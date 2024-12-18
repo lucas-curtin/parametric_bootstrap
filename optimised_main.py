@@ -14,41 +14,53 @@ from iminuit import Minuit
 from iminuit.cost import ExtendedUnbinnedNLL
 from loguru import logger
 from scipy.integrate import dblquad, quad
-from sweights import SWeight
 
 image_dir = Path("/Users/lucascurtin/Desktop/latex_bank/S1/images")
 
 # %%
 # ? Parameters
-mu = 3
-sigma = 0.3
-beta = 1
-m = 1.4
-f = 0.6
-lam = 0.3
-mu_b = 0
-sigma_b = 2.5
+tp = {
+    "mu": 3,
+    "sigma": 0.3,
+    "beta": 1,
+    "m": 1.4,
+    "f": 0.6,
+    "lam": 0.3,
+    "mu_b": 0,
+    "sigma_b": 2.5,
+    "bounds_x": [0, 5],
+    "bounds_y": [0, 10],
+}
 
-BOUNDS_X = [0, 5]
-BOUNDS_Y = [0, 10]
 
-# Define partial functions for each PDF
+# Define partial functions for each PDF using values from tp
 g_s = partial(
     pdf.g_s_base,
-    mu=mu,
-    sigma=sigma,
-    beta=beta,
-    m=m,
-    x_min=BOUNDS_X[0],
-    x_max=BOUNDS_X[1],
+    mu=tp["mu"],
+    sigma=tp["sigma"],
+    beta=tp["beta"],
+    m=tp["m"],
+    x_min=tp["bounds_x"][0],
+    x_max=tp["bounds_x"][1],
 )
-h_s = partial(pdf.h_s_base, lam=lam, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
-g_b = partial(pdf.g_b_base, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
-h_b = partial(pdf.h_b_base, mu=mu_b, sigma=sigma_b, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
+h_s = partial(
+    pdf.h_s_base,
+    lam=tp["lam"],
+    y_min=tp["bounds_y"][0],
+    y_max=tp["bounds_y"][1],
+)
+g_b = partial(pdf.g_b_base, x_min=tp["bounds_x"][0], x_max=tp["bounds_x"][1])
+h_b = partial(
+    pdf.h_b_base,
+    mu=tp["mu_b"],
+    sigma=tp["sigma_b"],
+    y_min=tp["bounds_y"][0],
+    y_max=tp["bounds_y"][1],
+)
 
 
 # %%
-# ? 2D PDFS
+# 2D PDFs
 def signal_pdf(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Signal PDF."""
     g_s_val = g_s(x)
@@ -113,15 +125,19 @@ def integrate_function(
 # Example usage with the signal_pdf and background_pdf:
 
 # Integrating g_s and h_s (1D PDFs)
-g_s_int, g_s_err = integrate_function(g_s, BOUNDS_X)
-h_s_int, h_s_err = integrate_function(h_s, BOUNDS_Y)
+g_s_int, g_s_err = integrate_function(g_s, tp["bounds_x"])
+h_s_int, h_s_err = integrate_function(h_s, tp["bounds_y"])
 
 # Integrating signal_pdf and background_pdf (2D PDFs)
-signal_int, signal_err = integrate_function(signal_pdf, BOUNDS_X, BOUNDS_Y)
-bkg_int, bkg_err = integrate_function(background_pdf, BOUNDS_X, BOUNDS_Y)
+signal_int, signal_err = integrate_function(signal_pdf, tp["bounds_x"], tp["bounds_x"])
+bkg_int, bkg_err = integrate_function(background_pdf, tp["bounds_x"], tp["bounds_x"])
 
 # Integrating total_pdf (2D PDF)
-total_int, total_err = integrate_function(lambda x, y: total_pdf(x, y, f), BOUNDS_X, BOUNDS_Y)
+total_int, total_err = integrate_function(
+    lambda x, y: total_pdf(x, y, tp["f"]),
+    tp["bounds_x"],
+    tp["bounds_x"],
+)
 
 # Display results
 logger.info("Integration Results (Generalized):")
@@ -142,8 +158,8 @@ fig, axs = plt.subplots(
 axs = axs.ravel()
 
 # Plot g_s (Truncated Crystal Ball)
-x_data = np.linspace(BOUNDS_X[0], BOUNDS_X[1], 200)
-y_data = np.linspace(BOUNDS_Y[0], BOUNDS_Y[1], 200)
+x_data = np.linspace(tp["bounds_x"][0], tp["bounds_x"][1], 200)
+y_data = np.linspace(tp["bounds_x"][0], tp["bounds_x"][1], 200)
 
 
 axs[0].plot(x_data, g_s(x_data))
@@ -183,13 +199,13 @@ fig, axs = plt.subplots(
 axs = axs.ravel()
 
 # Generate data for plotting
-x_data = np.linspace(BOUNDS_X[0], BOUNDS_X[1], 200)
-y_data = np.linspace(BOUNDS_Y[0], BOUNDS_Y[1], 200)
+x_data = np.linspace(tp["bounds_x"][0], tp["bounds_x"][1], 200)
+y_data = np.linspace(tp["bounds_x"][0], tp["bounds_x"][1], 200)
 
 # Calculate PDFs for X
 signal_x = g_s(x_data)
 background_x = g_b(x_data)
-total_x = f * signal_x + (1 - f) * background_x
+total_x = tp["f"] * signal_x + (1 - tp["f"]) * background_x
 
 # Plot X projections
 axs[0].plot(x_data, signal_x, label="Signal (g_s)", linestyle="--")
@@ -203,7 +219,7 @@ axs[0].legend()
 # Calculate PDFs for Y
 signal_y = h_s(y_data)
 background_y = h_b(y_data)
-total_y = f * signal_y + (1 - f) * background_y
+total_y = tp["f"] * signal_y + (1 - tp["f"]) * background_y
 
 # Plot Y projections
 axs[1].plot(y_data, signal_y, label="Signal (h_s)", linestyle="--")
@@ -222,8 +238,8 @@ plt.show()
 # %%
 # ? 2D Plot
 x_grid, y_grid = np.meshgrid(
-    np.linspace(BOUNDS_X[0], BOUNDS_X[1], 100),
-    np.linspace(BOUNDS_Y[0], BOUNDS_Y[1], 100),
+    np.linspace(tp["bounds_x"][0], tp["bounds_x"][1], 100),
+    np.linspace(tp["bounds_x"][0], tp["bounds_x"][1], 100),
 )
 
 # Flatten the grid arrays for compatibility with the PDF functions
@@ -231,7 +247,7 @@ x_flat = x_grid.ravel()
 y_flat = y_grid.ravel()
 
 # Compute the total PDF on the flattened grid
-joint_pdf_flat = total_pdf(x_flat, y_flat, f)
+joint_pdf_flat = total_pdf(x_flat, y_flat, tp["f"])
 
 # Reshape the result back into the grid shape
 joint_pdf = joint_pdf_flat.reshape(x_grid.shape)
@@ -259,54 +275,71 @@ plt.show()
 # ? Generating Estimates
 
 
-def total_pdf_sampler(
+def total_pdf_sampler(  # noqa: PLR0913
     n_events: int,
+    mu: float,
+    sigma: float,
+    beta: float,
+    m: float,
+    lam: float,
+    mu_b: float,
+    sigma_b: float,
     f: float,
     rng: np.random.Generator,
+    bounds_x: list = tp["bounds_x"],
+    bounds_y: list = tp["bounds_y"],
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Generate events from the total PDF using vectorized rejection sampling.
+    """Generate events from the total PDF using vectorised rejection sampling."""
+    g_s = partial(
+        pdf.g_s_base,
+        mu=mu,
+        sigma=sigma,
+        beta=beta,
+        m=m,
+        x_min=bounds_x[0],
+        x_max=bounds_x[1],
+    )
+    h_s = partial(pdf.h_s_base, lam=lam, y_min=bounds_y[0], y_max=bounds_y[1])
+    g_b = partial(pdf.g_b_base, x_min=bounds_x[0], x_max=bounds_x[1])
+    h_b = partial(pdf.h_b_base, mu=mu_b, sigma=sigma_b, y_min=bounds_y[0], y_max=bounds_y[1])
 
-    Parameters:
-        n_events (int): Number of events to generate.
-        f (float): Fraction parameter for the total PDF function.
-        rng (np.random.Generator): Random number generator.
-
-    Returns:
-        tuple[np.ndarray, np.ndarray]: Arrays of x and y samples.
-    """
     accepted_x = []
     accepted_y = []
 
     while len(accepted_x) < n_events:
-        # Generate a large pool of random samples
+        # Generate random samples
         x_rand = rng.uniform(
-            low=BOUNDS_X[0],
-            high=BOUNDS_X[1],
+            low=bounds_x[0],
+            high=bounds_x[1],
             size=10 * (n_events - len(accepted_x)),
         )
         y_rand = rng.uniform(
-            low=BOUNDS_Y[0],
-            high=BOUNDS_Y[1],
+            low=bounds_y[0],
+            high=bounds_y[1],
             size=10 * (n_events - len(accepted_y)),
         )
         p_rand = rng.uniform(low=0, high=1, size=10 * (n_events - len(accepted_x)))
 
-        # Calculate PDF values for the current batch
-        pdf_values = total_pdf(x=x_rand, y=y_rand, f=f)
-        max_pdf_value = np.max(pdf_values)
+        g_s_val = g_s(x_rand)
+        h_s_val = h_s(y_rand)
+        signal = g_s_val * h_s_val
 
-        # Apply rejection criterion
-        acceptance_mask = p_rand * max_pdf_value <= pdf_values
+        g_b_val = g_b(x_rand)
+        h_b_val = h_b(y_rand)
+        background = g_b_val * h_b_val
 
-        # Append accepted samples
+        total_pdf_values = f * signal + (1 - f) * background
+        max_pdf_value = np.max(total_pdf_values)
+
+        acceptance_mask = p_rand * max_pdf_value <= total_pdf_values
+
         accepted_x.extend(x_rand[acceptance_mask])
         accepted_y.extend(y_rand[acceptance_mask])
 
-    # Convert lists to arrays and return exactly n_events samples
     return np.array(accepted_x[:n_events]), np.array(accepted_y[:n_events])
 
 
-def total_pdf_wrapper(  # noqa: PLR0913
+def total_density(  # noqa: PLR0913
     xy: tuple[np.ndarray, np.ndarray],
     mu: float,
     sigma: float,
@@ -316,107 +349,167 @@ def total_pdf_wrapper(  # noqa: PLR0913
     lam: float,
     mu_b: float,
     sigma_b: float,
+    n_events: float,  # Total number of events (expected number of events)
 ) -> tuple[float, np.ndarray]:
-    """Wrapper for the total PDF."""
+    """Wrapper for the total PDF with N_total, returning both the integral and density."""
     x, y = xy
 
-    # Update partials if parameters change during fitting
-    g_s = partial(
-        pdf.g_s_base,
+    # Precompute the individual PDFs
+    g_s_vals = pdf.g_s_base(
+        x,
         mu=mu,
         sigma=sigma,
         beta=beta,
         m=m,
-        x_min=BOUNDS_X[0],
-        x_max=BOUNDS_X[1],
+        x_min=tp["bounds_x"][0],
+        x_max=tp["bounds_x"][1],
     )
-    h_s = partial(pdf.h_s_base, lam=lam, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
-    g_b = partial(pdf.g_b_base, x_min=BOUNDS_X[0], x_max=BOUNDS_X[1])
-    h_b = partial(pdf.h_b_base, mu=mu_b, sigma=sigma_b, y_min=BOUNDS_Y[0], y_max=BOUNDS_Y[1])
+    h_s_vals = pdf.h_s_base(y, lam=lam, y_min=tp["bounds_y"][0], y_max=tp["bounds_y"][1])
+    g_b_vals = pdf.g_b_base(x, x_min=tp["bounds_x"][0], x_max=tp["bounds_x"][1])
+    h_b_vals = pdf.h_b_base(
+        y,
+        mu=mu_b,
+        sigma=sigma_b,
+        y_min=tp["bounds_y"][0],
+        y_max=tp["bounds_y"][1],
+    )
 
-    # Compute PDF values
-    pdf_values = f * (g_s(x) * h_s(y)) + (1 - f) * (g_b(x) * h_b(y))
-    return len(x), pdf_values
+    # Combine PDFs
+    signal_pdf = g_s_vals * h_s_vals
+    background_pdf = g_b_vals * h_b_vals
+
+    # Total PDF
+    pdf_values = f * signal_pdf + (1 - f) * background_pdf
+
+    # Return integral (n_events) and scaled density
+    return n_events, n_events * pdf_values
 
 
-def perform_fit(sampled_x: np.array, sampled_y: np.array) -> None:
-    """Complete minuit fit."""
-    nll = ExtendedUnbinnedNLL((sampled_x, sampled_y), total_pdf_wrapper)
+def perform_fit(  # noqa: PLR0913
+    sampled_x: np.array,
+    sampled_y: np.array,
+    mu: float,
+    sigma: float,
+    beta: float,
+    m: float,
+    f: float,
+    lam: float,
+    mu_b: float,
+    sigma_b: float,
+    n_events: int,
+    rng: np.random.Generator,
+) -> Minuit:
+    """Complete minuit fit using extended unbinned likelihood."""
+    # Define the NLL using the provided total_density function
+    nll = ExtendedUnbinnedNLL((sampled_x, sampled_y), total_density)
+
+    # Noise factor for parameter initialization
+    noise_factor = 0.2
+
+    # Initialize Minuit with parameters perturbed by noise
     minuit = Minuit(
         nll,
-        mu=mu,
-        sigma=sigma,
+        mu=mu * (1 + rng.normal(0, noise_factor)),
+        sigma=sigma * (1 + rng.normal(0, noise_factor)),
         beta=beta,
         m=m,
-        f=f,
-        lam=lam,
-        mu_b=mu_b,
-        sigma_b=sigma_b,
+        f=f * (1 + rng.normal(0, noise_factor)),
+        lam=lam * (1 + rng.normal(0, noise_factor)),
+        mu_b=mu_b * (1 + rng.normal(0, noise_factor)),
+        sigma_b=sigma_b * (1 + rng.normal(0, noise_factor)),
+        n_events=n_events * (1 + rng.normal(0, noise_factor)),
     )
-    minuit.limits["beta"] = (0, None)
-    minuit.limits["m"] = (1, None)
+
+    # Set parameter limits
+    minuit.limits["beta"] = (0, None)  # Beta must be positive
+    minuit.limits["m"] = (1, None)  # Mass m must be >= 1
+
+    # Perform the minimization and error analysis
     minuit.migrad()
     minuit.hesse()
+
     return minuit
 
 
 rng = np.random.default_rng(seed=451)
-n_events = 100_000
 
+
+tp["n_events"] = 100_000
 
 sampled_x, sampled_y = total_pdf_sampler(
-    n_events=n_events,
-    f=f,
+    n_events=tp["n_events"],
+    f=tp["f"],
     rng=rng,
+    mu=tp["mu"],
+    sigma=tp["sigma"],
+    beta=tp["beta"],
+    m=tp["m"],
+    lam=tp["lam"],
+    mu_b=tp["mu_b"],
+    sigma_b=tp["sigma_b"],
+    bounds_x=tp["bounds_x"],
+    bounds_y=tp["bounds_y"],
 )
 
-extended_minuit = perform_fit(sampled_x, sampled_y)
+extended_minuit = perform_fit(
+    sampled_x=sampled_x,
+    sampled_y=sampled_y,
+    mu=tp["mu"],
+    sigma=tp["sigma"],
+    beta=tp["beta"],
+    m=tp["m"],
+    f=tp["f"],
+    lam=tp["lam"],
+    mu_b=tp["mu_b"],
+    sigma_b=tp["sigma_b"],
+    n_events=tp["n_events"],
+    rng=rng,
+)
 
 
 # %%
 # ? Plotting results
-actual_values = {
-    "mu": mu,
-    "sigma": sigma,
-    "beta": beta,
-    "m": m,
-    "f": f,
-    "lam": lam,
-    "mu_b": mu_b,
-    "sigma_b": sigma_b,
-}
 
-# Extract parameter names, estimated values, and uncertainties from extended_minuit
+
 param_names = extended_minuit.parameters
-estimated_values = [extended_minuit.values[name] for name in param_names]  # noqa: PD011
-estimated_errors = [extended_minuit.errors[name] for name in param_names]
 
-# Match actual values order to the parameter names
-actual_values_ordered = [actual_values[name] for name in param_names]
+actual_values_scaled = [
+    tp[name] / tp["n_events"] if name == "n_events" else tp[name] for name in param_names
+]
 
-# X positions for the bars
+estimated_values_scaled = [
+    extended_minuit.values[name] / tp["n_events"]  # noqa: PD011
+    if name == "n_events"
+    else extended_minuit.values[name]  # noqa: PD011
+    for name in param_names
+]
+
+estimated_errors_scaled = [
+    extended_minuit.errors[name] / tp["n_events"]
+    if name == "n_events"
+    else extended_minuit.errors[name]
+    for name in param_names
+]
+actual_values_ordered = [tp[name] for name in param_names]
+
 x_positions = np.arange(len(param_names))
-
-# Bar width
 bar_width = 0.4
 
 plt.figure(figsize=(10, 6))
 
-# Plot actual values
 plt.bar(
     x_positions - bar_width / 2,
-    actual_values_ordered,
+    actual_values_scaled,
     width=bar_width,
     color="red",
     alpha=0.7,
     label="Actual Values",
 )
 
-# Plot estimated values with error bars
 plt.bar(
     x_positions + bar_width / 2,
-    estimated_values,
-    yerr=estimated_errors,
+    estimated_values_scaled,
+    yerr=estimated_errors_scaled,
     width=bar_width,
     color="blue",
     alpha=0.7,
@@ -424,17 +517,35 @@ plt.bar(
     label="Estimated Values",
 )
 
-# Formatting
-plt.xticks(x_positions, param_names, rotation=45, ha="right", fontsize=12)
+param_names_latex = [
+    r"$\mu$",
+    r"$\sigma$",
+    r"$\beta$",
+    r"$m$",
+    r"$f$",
+    r"$\lambda$",
+    r"$\mu_b$",
+    r"$\sigma_b$",
+    r"$\frac{n_{\text{total}}}{n_{\text{events}}}$",
+]
+
+plt.xticks(
+    x_positions,
+    param_names_latex,  # Use the LaTeX formatted parameter names
+    rotation=45,
+    ha="right",
+    fontsize=12,
+)
 plt.xlabel("Parameter Names", fontsize=14)
-plt.ylabel("Parameter Values", fontsize=14)
-plt.title("Comparison of Actual and Estimated Parameter Values", fontsize=16)
+plt.ylabel("Parameter Values (Scaled)", fontsize=14)
+plt.title("Comparison of Actual and Estimated Parameter Values (Scaled)", fontsize=16)
 plt.legend(fontsize=12)
 plt.grid(axis="y", linestyle="--", alpha=0.7)
 plt.tight_layout()
 
-plt.savefig(image_dir / "param_estimates.png", dpi=300)
+plt.savefig(image_dir / "param_estimates_scaled.png", dpi=300)
 plt.show()
+
 
 # %%
 # ? Generation Timings
@@ -458,7 +569,7 @@ for _ in range(n_batches):
         timeit(
             lambda: total_pdf_sampler(
                 n_events=n_events,
-                f=f,
+                f=tp["f"],
                 rng=rng,
             ),
             number=n_runs_per_batch,
@@ -509,191 +620,118 @@ logger.info(
     f"(iii) Fit execution: {fit_time_mean:.6f} ± {fit_time_std:.6f} s "
     f"(relative: {relative_fit:.2f} ± {relative_fit_uncertainty:.2f})",
 )
+
+
 # %%
 # ? Parametric Bootstrapping
+rng = np.random.default_rng(seed=451)
 
-sample_sizes = [500, 1000, 2500, 5000, 10000]
-n_bootstrap = 250
+sample_sizes = [500]
+n_toys = 250
 
-lam_results = {size: {"values": [], "errors": []} for size in sample_sizes}
+results = {}
 
+for sample_size in sample_sizes:
+    n_events = rng.poisson(sample_size)
 
-def nll(lam: float, y_data: np.ndarray) -> float:
-    """Calculate the negative log-likelihood for fitting lambda."""
-    pdf_y = h_s(y=y_data, lam=lam)
-    return -np.sum(np.log(pdf_y))
-
-
-for n_events in sample_sizes:
-    lambda_estimates = []
-    rng = np.random.default_rng(seed=451)  # Use the RNG with a fixed seed for reproducibility
-
-    for _ in range(n_bootstrap):
-        # Introduce Poisson variation to the sample size
-        actual_n_events = rng.poisson(n_events)
-
-        # Generate the sample using the varied sample size
-        sampled_x, sampled_y = total_pdf_sampler(
-            n_events=actual_n_events,  # Use Poisson-varied sample size
-            f=f,
-            rng=rng,
-        )
-
-        # Perform the MLE fit for lambda
-        minuit = Minuit(
-            lambda lam: nll(lam=lam, y_data=sampled_y),  # noqa: B023
-            lam=lam,
-        )
-
-        minuit.migrad()
-        if minuit.valid:
-            lam_results[n_events]["values"].append(minuit.values["lam"])  # noqa: PD011
-            lam_results[n_events]["errors"].append(minuit.errors["lam"])
-
-
-# Calculate bias and uncertainty from results dictionary
-bias = [np.mean(lam_results[size]["values"]) - lam for size in sample_sizes]
-uncertainty = [np.mean(lam_results[size]["errors"]) for size in sample_sizes]
-
-# Plot results
-fig, axs = plt.subplots(1, 2, figsize=(10, 6))
-
-# Bias plot
-axs[0].plot(sample_sizes, bias, marker="o")
-axs[0].set_title("Bias in λ vs Sample Size")
-axs[0].set_xlabel("Sample Size")
-axs[0].set_ylabel("Bias")
-axs[0].grid(visible=True)
-
-# Uncertainty plot
-axs[1].plot(sample_sizes, uncertainty, marker="o")
-axs[1].set_title("Uncertainty in λ vs Sample Size")
-axs[1].set_xlabel("Sample Size")
-axs[1].set_ylabel("Uncertainty")
-axs[1].grid(visible=True)
-
-plt.tight_layout()
-plt.savefig(image_dir / "parametric_bootstrapping.png", dpi=300)
-plt.show()
-
-
-# %%
-# ? Extended maximum likelihood fit in X and calculation of sWeights for Y
-
-
-def nll_x(mu: float, sigma: float, beta: float, m: float, f: float) -> float:
-    """Negative log-likelihood for fitting in X."""
-    signal_pdf = pdf.g_s_base(sampled_x, mu, sigma, beta, m, BOUNDS_X[0], BOUNDS_X[1])
-    background_pdf = pdf.g_b_base(sampled_x, BOUNDS_X[0], BOUNDS_X[1])
-    total_pdf_x = f * signal_pdf + (1 - f) * background_pdf
-    return -np.sum(np.log(total_pdf_x))
-
-
-weighted_lam_results = {size: {"values": [], "errors": []} for size in sample_sizes}
-
-for n_events in sample_sizes:
-    sampled_x, sampled_y = total_pdf_sampler(
-        n_events=n_events,  # Use Poisson-varied sample size
-        f=f,
+    # Fit the model to the initial sample
+    sample_x, sample_y = total_pdf_sampler(
+        n_events=n_events,
+        f=tp["f"],
         rng=rng,
+        mu=tp["mu"],
+        sigma=tp["sigma"],
+        beta=tp["beta"],
+        m=tp["m"],
+        lam=tp["lam"],
+        mu_b=tp["mu_b"],
+        sigma_b=tp["sigma_b"],
     )
 
-    # Set up Minuit for the extended fit
-    minuit_x = Minuit(
-        nll_x,
-        mu=mu,
-        sigma=sigma,
-        beta=beta,
-        m=m,
-        f=f,
-    )
-    minuit_x.limits["beta"] = (0, None)  # Ensure beta > 0
-    minuit_x.limits["m"] = (1, None)  # Ensure m > 1
-    minuit_x.limits["f"] = (0, 1)  # Signal fraction must be between 0 and 1
-    minuit_x.migrad()
-    minuit_x.hesse()
-
-    # Extract fit parameters
-    fit_params_x = minuit_x.values  # noqa: PD011
-    fit_signal_fraction = fit_params_x["f"]
-    fit_signal_count = fit_signal_fraction * len(sampled_x)
-    fit_background_count = (1 - fit_signal_fraction) * len(sampled_x)
-
-    # Create the sweighter using spdf and bpdf
-    sweighter = SWeight(
-        data=sampled_x,  # Dataset (reshaped if necessary)
-        pdfs=[
-            lambda x,
-            mu=fit_params_x["mu"],
-            sigma=fit_params_x["sigma"],
-            beta=fit_params_x["beta"],
-            m=fit_params_x["m"]: pdf.g_s_base(
-                np.atleast_1d(x),
-                mu,
-                sigma,
-                beta,
-                m,
-                BOUNDS_X[0],
-                BOUNDS_X[1],
-            ),
-            lambda x: pdf.g_b_base(np.atleast_1d(x), BOUNDS_X[0], BOUNDS_X[1]),
-        ],  # Signal and background PDFs
-        yields=[fit_signal_count, fit_background_count],  # Signal and background yields
-        discvarranges=[(BOUNDS_X[0], BOUNDS_X[1])],
-        method="summation",
-        compnames=["sig", "bkg"],
-        verbose=True,
-        checks=True,
+    nll = ExtendedUnbinnedNLL((sample_x, sample_y), total_density)
+    mi = Minuit(
+        nll,
+        mu=tp["mu"],
+        sigma=tp["sigma"],
+        beta=tp["beta"],
+        m=tp["m"],
+        f=tp["f"],
+        lam=tp["lam"],
+        mu_b=tp["mu_b"],
+        sigma_b=tp["sigma_b"],
+        n_events=n_events,
     )
 
-    # Retrieve signal weights
-    signal_weights = sweighter.get_weight(0, sampled_x)
+    mi.limits["beta"] = (0, None)
+    mi.limits["m"] = (1, None)
 
-    # Perform a weighted fit in Y to extract lambda
-    def nll_y_weighted(lam: float) -> float:
-        """Weighted negative log-likelihood for fitting in Y."""
-        pdf_y = pdf.h_s_base(sampled_y, lam, BOUNDS_Y[0], BOUNDS_Y[1])  # noqa: B023
-        weighted_log_likelihood = signal_weights * np.log(pdf_y)  # noqa: B023
-        return -np.sum(weighted_log_likelihood)
+    mi.migrad()
+    mi.hesse()
 
-    # Set up Minuit for the weighted fit in Y
-    minuit_y_weighted = Minuit(nll_y_weighted, lam=lam)
-    minuit_y_weighted.limits["lam"] = (0, None)  # Decay constant lambda must be > 0
-    minuit_y_weighted.migrad()
-    minuit_y_weighted.hesse()
+    fit_params = {key: mi.values[key] for key in mi.parameters}  # noqa: PD011
 
-    weighted_lam_results[n_events]["values"].append(minuit_y_weighted.values["lam"])  # noqa: PD011
-    weighted_lam_results[n_events]["errors"].append(minuit_y_weighted.errors["lam"])
+    toys = [
+        total_pdf_sampler(
+            n_events=int(fit_params["n_events"]),
+            f=fit_params["f"],
+            rng=rng,
+            mu=fit_params["mu"],
+            sigma=fit_params["sigma"],
+            beta=fit_params["beta"],
+            m=fit_params["m"],
+            lam=fit_params["lam"],
+            mu_b=fit_params["mu_b"],
+            sigma_b=fit_params["sigma_b"],
+        )
+        for _ in range(n_toys)
+    ]
 
+    results[sample_size] = {
+        "values": {param: [] for param in mi.parameters},
+        "errors": {param: [] for param in mi.parameters},
+    }
 
-weighted_bias = [np.mean(weighted_lam_results[size]["values"]) - lam for size in sample_sizes]
-weighted_uncertainty = [np.mean(weighted_lam_results[size]["errors"]) for size in sample_sizes]
+    # Fit each toy sample, with a minimiser the same as the one to make the original data.
+    for toy in toys:
+        nll_t = ExtendedUnbinnedNLL((toy[0], toy[1]), total_density)
+        pdf.g_s_base(
+            toy[0],
+            mu=tp["mu"],
+            sigma=tp["sigma"],
+            beta=tp["beta"],
+            m=tp["m"],
+            x_min=tp["bounds_x"][0],
+            x_max=tp["bounds_x"][1],
+        )
+        pdf.h_s_base(
+            toy[0],
+            lam=tp["lam"],
+            y_min=tp["bounds_y"][0],
+            y_max=tp["bounds_y"][1],
+        )
+        mi_t = Minuit(
+            nll_t,
+            mu=tp["mu"],
+            sigma=tp["sigma"],
+            beta=tp["beta"],
+            m=tp["m"],
+            f=tp["f"],
+            lam=tp["lam"],
+            mu_b=tp["mu_b"],
+            sigma_b=tp["sigma_b"],
+            n_events=n_events,
+        )
 
+        mi_t.limits["beta"] = (0, None)  # Beta must be positive
+        mi_t.limits["m"] = (1, None)
+        mi_t.limits["sigma"] = (0.1, 1)
 
-# %%
-# Plot lambda results
-fig, axs = plt.subplots(1, 2, figsize=(10, 6))
+        mi_t.migrad()
+        mi_t.hesse()
 
-# Bias plot
-axs[0].plot(sample_sizes, bias, marker="o", label="Unweighted")
-axs[0].plot(sample_sizes, weighted_bias, marker="s", label="Weighted")
-axs[0].set_title("Bias in λ vs Sample Size")
-axs[0].set_xlabel("Sample Size")
-axs[0].set_ylabel("Bias")
-axs[0].legend()
-axs[0].grid(visible=True)
-
-# Uncertainty plot
-axs[1].plot(sample_sizes, uncertainty, marker="o", label="Unweighted")
-axs[1].plot(sample_sizes, weighted_uncertainty, marker="s", label="Weighted")
-axs[1].set_title("Uncertainty in λ vs Sample Size")
-axs[1].set_xlabel("Sample Size")
-axs[1].set_ylabel("Uncertainty")
-axs[1].legend()
-axs[1].grid(visible=True)
-
-plt.tight_layout()
-plt.savefig(image_dir / "sweights.png", dpi=300)
-plt.show()
+        # Store values and errors in the results dictionary
+        for param in mi_t.parameters:
+            results[sample_size]["values"][param].append(mi_t.values[param])  # noqa: PD011
+            results[sample_size]["errors"][param].append(mi_t.errors[param])
 
 # %%
